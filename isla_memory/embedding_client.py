@@ -11,6 +11,9 @@ class EmbeddingClient(Protocol):
     def embed(self, text: str) -> list[float]:
         ...
 
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        ...
+
 
 class HashEmbeddingClient:
     """Deterministic local embedding for demos and tests.
@@ -55,6 +58,9 @@ class HashEmbeddingClient:
 
         return vector
 
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
     def _hash_index(self, token: str) -> int:
         digest = hashlib.blake2b(token.encode("utf-8"), digest_size=4).digest()
         raw = int.from_bytes(digest, byteorder="big")
@@ -92,3 +98,12 @@ class OpenAIEmbeddingClient:
             input=text,
         )
         return list(response.data[0].embedding)
+
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        response = self.client.embeddings.create(
+            model=self.model,
+            input=texts,
+        )
+        return [list(item.embedding) for item in response.data]

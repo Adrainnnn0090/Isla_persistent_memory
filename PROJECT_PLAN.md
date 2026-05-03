@@ -138,12 +138,24 @@ class Memory(BaseModel):
     memory_id: str
     user_id: str
     content: str
+    memory_type: Literal["preference", "fact", "goal", "constraint", "profile", "other"]
     embedding: list[float]
     created_at: datetime
     updated_at: datetime
+    invalid_at: datetime | None = None
     source_message_id: str | None = None
     metadata: dict[str, Any] = {}
+
+    @property
+    def is_valid(self) -> bool:
+        return self.invalid_at is None
 ```
+
+约定：
+
+- `invalid_at is None` 表示 active memory。
+- `invalid_at is not None` 表示 soft-deleted / invalid memory。
+- `memory_type` 是一等字段，不只放在 metadata 中，避免 candidate 写入 store 后类型信息丢失。
 
 ### 5.4 MemoryDecision
 
@@ -153,7 +165,9 @@ class MemoryDecision(BaseModel):
     candidate: CandidateMemory
     target_memory_id: str | None = None
     final_content: str | None = None
+    confidence: float
     reason: str
+    metadata_patch: dict[str, Any] = {}
 ```
 
 ## 6. 模块设计
@@ -183,6 +197,7 @@ extract_memories(
 - 不保存一次性问题、短期上下文、无意义闲聊。
 - 偏好、长期目标、稳定身份信息、长期约束优先保存。
 - 避免保存敏感信息，除非用户明确要求长期记住。
+- 对“不要再记住”“忘记”“我不想再用 X”“我改变主意了”等否定或取消表达，应标记为 DELETE 意图，而不是抽取成新的正向偏好。
 
 示例候选 memory：
 
@@ -193,6 +208,21 @@ extract_memories(
   "confidence": 0.92,
   "source_message_id": "msg_123",
   "metadata": {
+    "topic": "communication"
+  }
+}
+```
+
+DELETE 意图示例：
+
+```json
+{
+  "content": "用户不再希望使用英文回答技术问题。",
+  "memory_type": "preference",
+  "confidence": 0.9,
+  "source_message_id": "msg_456",
+  "metadata": {
+    "intent": "delete",
     "topic": "communication"
   }
 }
@@ -225,43 +255,105 @@ CREATE TABLE memories (
     memory_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     content TEXT NOT NULL,
+    memory_type TEXT NOT NULL DEFAULT 'other',
     embedding_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    invalid_at TEXT,
     source_message_id TEXT,
     metadata_json TEXT NOT NULL
 );
 
 CREATE INDEX idx_memories_user_id ON memories(user_id);
+CREATE INDEX idx_memories_valid ON memories(user_id, invalid_at);
 ```
+
+存储约束：
+
+- `similarity_search` 默认只检索 `invalid_at IS NULL` 的 active memories。
+- `delete_memory` 执行 soft delete：写入 `invalid_at`，不物理删除。
+- `ADD` 时必须从 `CandidateMemory.memory_type` 透传到 `Memory.memory_type`。
 
 ### 6.3 `memory_updater.py`
 
 职责：
 
 - 对 candidate memory 做 similarity search。
-- 根据相似 memory 和候选 memory 决策 `ADD`、`UPDATE`、`DELETE`、`NOOP`。
+- 将 candidate memory 与 top-s 相似旧 memories 一起交给 LLM decision module。
+- LLM 只能通过 tool call / function calling 选择 `ADD`、`UPDATE`、`DELETE`、`NOOP`。
+- 校验 LLM 决策，并在非法输出时回退到规则版决策。
 - 执行对应 store 操作。
 
 核心流程：
 
 ```text
-for candidate in candidates:
-    candidate_embedding = embed(candidate.content)
-    similar_memories = store.similarity_search(user_id, candidate_embedding, top_k=5)
-    decision = decide(candidate, similar_memories)
+for candidate_memory ω_i in candidates:
+    if ω_i.confidence < MEMORY_MIN_CONFIDENCE:
+        decision = NOOP
+    else:
+        candidate_embedding = embed(ω_i.content)
+        similar_memories = store.similarity_search(
+            user_id=user_id,
+            query_embedding=candidate_embedding,
+            top_k=MEMORY_UPDATE_TOP_S,
+        )
+        llm_decision = decision_llm.tool_call(
+            candidate_memory=ω_i,
+            retrieved_memories=similar_memories,
+            current_user_message=current_user_message,
+            source_metadata=ω_i.metadata,
+        )
+        decision = validate_or_fallback(llm_decision, candidate=ω_i, similar_memories=similar_memories)
     apply(decision)
 ```
 
-决策规则 MVP：
+LLM decision 输入：
 
-- 如果没有相似 memory，执行 `ADD`。
-- 如果相似度高于 `0.90` 且内容基本一致，执行 `NOOP`。
-- 如果相似度高于 `0.80` 且候选内容更新或更具体，执行 `UPDATE`。
-- 如果候选内容表达用户不再需要某项记忆，执行 `DELETE`。
-- 如果置信度低于阈值，比如 `0.65`，执行 `NOOP`。
+- `candidate_memory`: 当前候选记忆 `ω_i`。
+- `retrieved_memories`: top-s 相似旧 memories，包含 `memory_id`、`content`、`metadata`、`similarity_score`、`created_at`、`updated_at`、`invalid_at`。
+- `current_user_message`: 触发本轮更新的用户消息。
+- `source_metadata`: `source_message_id`、memory type、confidence、topic 等抽取来源信息。
 
-可先使用规则决策，后续再引入 LLM 决策器。
+LLM 可调用的 tool / function schema：
+
+```text
+add_memory(
+    content: str,
+    memory_type: str,
+    metadata_patch: dict,
+    reason: str,
+    confidence: float
+)
+
+update_memory(
+    memory_id: str,
+    content: str,
+    metadata_patch: dict,
+    reason: str,
+    confidence: float
+)
+
+delete_memory(
+    memory_id: str,
+    reason: str,
+    confidence: float
+)
+
+noop(
+    reason: str,
+    confidence: float
+)
+```
+
+执行约束：
+
+- LLM 只返回操作意图，不直接写数据库。
+- `UPDATE` / `DELETE` 的 `memory_id` 必须来自本轮 retrieved memories。
+- `ADD` / `UPDATE` 必须提供 `final_content`。
+- `DELETE` 是软删除：标记 `invalid_at`，不物理删除。
+- 在调用 LLM decision 前，updater 先做 negation/delete intent 前置检测；命中“不要再记住”“忘记”“不想再用”“改变主意”等表达时，优先按 DELETE 候选处理。
+- 如果 LLM 输出非法、缺少必填字段、target 不在 retrieved memories 中，系统回退到规则版决策。
+- 规则版仍保留为 `MEMORY_UPDATE_STRATEGY=rules` 或 LLM 失败时的 fallback。
 
 ### 6.4 `memory_retriever.py`
 
@@ -397,6 +489,7 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - 能运行 `python -m isla_memory` 或基础 import。
 - `pytest` 能启动，即使只有空测试。
 - `.env.example` 明确需要的 API Key 和模型配置。
+- `Memory` 模型包含 `memory_type` 和 `invalid_at`，并定义 active / soft-deleted 语义。
 
 ### Milestone 2：Memory Store 持久化
 
@@ -417,7 +510,8 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - 能按 memory_id 查询。
 - 能按 user_id 列出 memories。
 - 能更新 content、embedding、metadata、updated_at。
-- 能删除 memory。
+- 能 soft delete memory，并默认从 active list 和 similarity search 中过滤 invalid memories。
+- SQLite schema 与 `Memory` 模型一致，包含 `memory_type` 和 `invalid_at`。
 
 ### Milestone 3：Embedding 与相似度检索
 
@@ -477,6 +571,8 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - 更具体的新偏好会 `UPDATE`。
 - 用户明确取消某个偏好时能 `DELETE`。
 - 低置信度 candidate 不写入 store。
+- LLM tool-call 决策结果会被校验；非法 action、缺失 `memory_id`、target 不在 top-s 中时会 fallback。
+- `memory_type` 从 candidate 透传到新增或更新后的 memory。
 
 ### Milestone 6：Query-time Retrieval
 
@@ -496,6 +592,8 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - 对不相关 query 返回空列表或低数量结果。
 - 能调整 `top_k` 和 `min_score`。
 - 返回结果按相似度排序。
+- 默认不返回 soft-deleted / invalid memories。
+- 支持 recency decay 排序：`final_score = similarity * MEMORY_SIM_WEIGHT + recency_score * MEMORY_RECENCY_WEIGHT`。
 
 ### Milestone 7：Agent Prompt Augmentation
 
@@ -515,6 +613,7 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - prompt 中包含 relevant memories。
 - assistant response 能使用相关 memory。
 - response 生成后会抽取并更新新 memory。
+- prompt augmentation 遵守 `MEMORY_MAX_CONTEXT_TOKENS`，按检索排序注入 memories，超过预算即截断。
 
 ### Milestone 8：CLI Demo 与文档
 
@@ -542,9 +641,9 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 1. `models.py`
 2. `memory_store.py`
 3. `embedding_client.py`
-4. `memory_retriever.py`
-5. `memory_extractor.py`
-6. `memory_updater.py`
+4. `memory_extractor.py`
+5. `memory_updater.py`
+6. `memory_retriever.py`
 7. `agent.py`
 8. `scripts/demo_chat.py`
 9. tests 和 README
@@ -552,8 +651,8 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 原因：
 
 - 先完成数据模型和存储层，后续模块都依赖它。
-- retriever 依赖 embedding 和 store。
-- updater 依赖 extractor、embedding 和 store。
+- extractor 和 updater 先于 retriever，有助于用真实 memory 写入路径生成检索测试数据。
+- retriever 依赖 embedding、store 和真实 memory 数据形态。
 - agent 是最后的编排层。
 
 ## 10. 关键配置项
@@ -564,8 +663,17 @@ LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1-mini
 EMBEDDING_PROVIDER=openai
 EMBEDDING_MODEL=text-embedding-3-small
+MEMORY_UPDATE_STRATEGY=llm_tool_call
+MEMORY_UPDATE_TOP_S=5
+MEMORY_DECISION_MODEL=gpt-4.1-mini
+MEMORY_DECISION_MIN_CONFIDENCE=0.65
+MEMORY_DECISION_FALLBACK=rules
 MEMORY_TOP_K=5
 MEMORY_MIN_SCORE=0.72
+MEMORY_MAX_CONTEXT_TOKENS=800
+MEMORY_RECENCY_HALF_LIFE_DAYS=30
+MEMORY_RECENCY_WEIGHT=0.3
+MEMORY_SIM_WEIGHT=0.7
 MEMORY_DEDUP_SCORE=0.90
 MEMORY_UPDATE_SCORE=0.80
 MEMORY_MIN_CONFIDENCE=0.65
@@ -579,6 +687,13 @@ You extract long-term user memories from conversation.
 Only extract information that is likely to be useful in future conversations.
 Do not extract one-off tasks, temporary context, or trivial statements.
 Avoid sensitive personal data unless the user explicitly asks the assistant to remember it.
+If the user negates, cancels, changes, or asks to forget a previous preference or fact, mark the candidate as a DELETE intent instead of creating a new positive memory.
+
+DELETE intent examples:
+- "不要再记住我喜欢 X" -> metadata.intent = "delete"
+- "忘记我的项目偏好" -> metadata.intent = "delete"
+- "我不想再用英文回答了" -> metadata.intent = "delete"
+- "我改变主意了，不要简短回答" -> metadata.intent = "delete"
 
 Return JSON only:
 {
@@ -605,7 +720,100 @@ Current assistant message:
 
 ## 12. Update Decision 策略
 
-### 12.1 规则版 MVP
+### 12.1 LLM Tool-Call 决策版
+
+目标：
+
+- 用 embedding 检索 candidate memory `ω_i` 的 top-s 相似旧 memories。
+- 把 `ω_i` 与 retrieved memories 一起交给 LLM。
+- LLM 通过 tool/function calling 选择唯一操作。
+- 系统校验 tool call，并执行数据库写入。
+
+流程：
+
+```text
+candidate memory ω_i
+    ↓
+embed(ω_i.content)
+    ↓
+top-s similarity search from memory DB
+    ↓
+LLM decision prompt:
+  - candidate memory
+  - retrieved similar memories
+  - similarity scores
+  - source message metadata
+    ↓
+LLM tool call:
+  ADD / UPDATE / DELETE / NOOP
+    ↓
+validate decision
+    ↓
+apply database operation
+```
+
+决策语义：
+
+- `ADD`: 当前 candidate 是新的长期信息，与 retrieved memories 不重复也不冲突。
+- `UPDATE`: 当前 candidate 对某条旧 memory 做补充、修正、合并或状态更新。
+- `DELETE`: 当前 candidate 表达用户取消、否定或要求忘记某条旧 memory。
+- `NOOP`: 当前 candidate 低价值、重复、临时、无关或不足以安全更新。
+
+校验规则：
+
+- `candidate.confidence < MEMORY_MIN_CONFIDENCE` 时可直接 `NOOP`，避免无意义 LLM 调用。
+- 如果用户消息命中 negation/delete intent 前置检测，应优先检索相关旧 memory，并让 LLM decision 在 `DELETE` 与 `NOOP` 之间做受限选择。
+- `UPDATE` / `DELETE` 必须指定 `target_memory_id`。
+- `target_memory_id` 必须来自本轮 retrieved memories，不能让 LLM 任意指定数据库外 ID。
+- `ADD` / `UPDATE` 必须提供最终写入内容 `final_content`。
+- `DELETE` 只能执行软删除，标记 `invalid_at`。
+- LLM 输出非法、缺少必填字段、置信度低于 `MEMORY_DECISION_MIN_CONFIDENCE` 时，走 fallback。
+
+### 12.2 Tool Call Schema
+
+```text
+add_memory(
+    content: str,
+    memory_type: "preference|fact|goal|constraint|profile|other",
+    metadata_patch: dict,
+    reason: str,
+    confidence: float
+)
+
+update_memory(
+    memory_id: str,
+    content: str,
+    metadata_patch: dict,
+    reason: str,
+    confidence: float
+)
+
+delete_memory(
+    memory_id: str,
+    reason: str,
+    confidence: float
+)
+
+noop(
+    reason: str,
+    confidence: float
+)
+```
+
+系统将 tool call 统一转换为 `MemoryDecision`：
+
+```python
+class MemoryDecision(BaseModel):
+    action: Literal["ADD", "UPDATE", "DELETE", "NOOP"]
+    candidate: CandidateMemory
+    target_memory_id: str | None = None
+    final_content: str | None = None
+    confidence: float
+    reason: str
+    metadata_patch: dict[str, Any] = {}
+```
+
+### 12.3 规则版 fallback
 
 ```text
 if candidate.confidence < MEMORY_MIN_CONFIDENCE:
@@ -620,19 +828,35 @@ else:
     UPDATE top similar memory with merged content
 ```
 
-### 12.2 后续增强版
+fallback 触发场景：
 
-引入 LLM decision prompt：
+- `MEMORY_UPDATE_STRATEGY=rules`。
+- LLM decision 调用失败或超时。
+- LLM 返回非法 action。
+- `UPDATE` / `DELETE` 缺少 `memory_id`。
+- `memory_id` 不属于本轮 retrieved memories。
+- `ADD` / `UPDATE` 缺少最终内容。
+- LLM decision confidence 低于阈值。
 
-- 输入 candidate memory。
-- 输入 top similar existing memories。
-- 输出 action、target_memory_id、final_content、reason。
+### 12.4 Negation / Delete Intent 前置检测
 
-适合处理：
+在 LLM decision 前先用轻量规则识别否定、取消或遗忘意图，降低 DELETE 误判风险。
 
-- 语义相似但表达差异较大的记忆。
-- 新旧偏好冲突。
-- 需要合并多条 memory 的情况。
+典型触发表达：
+
+- “不要再记住 ...”
+- “忘记 ...”
+- “我不想再用 X ...”
+- “我改变主意了 ...”
+- “以后不用 ...”
+- “取消 ... 偏好”
+
+处理策略：
+
+- 命中后仍然检索 top-s 相似旧 memories。
+- 将用户原文、candidate 和 retrieved memories 一起交给 LLM decision。
+- LLM decision 在 `DELETE` 与 `NOOP` 之间选择，避免把否定表达误写成新的正向 memory。
+- `DELETE` 仍执行 soft delete，只写入 `invalid_at`。
 
 ## 13. 测试计划
 
@@ -640,10 +864,16 @@ else:
 
 - MemoryStore CRUD。
 - Embedding similarity。
-- Extractor JSON parsing。
-- Updater action decision。
-- Retriever top-k 和 threshold。
-- Agent prompt builder。
+- Extractor JSON parsing，使用 mock LLM 输出，不真实调用 API。
+- Updater LLM tool-call action decision，使用 mock tool call，不真实调用 API。
+- 无相似 memory 时，LLM tool call 为 `ADD`，系统新增 memory。
+- 高相似重复 memory 时，LLM tool call 为 `NOOP`，系统不新增重复项。
+- candidate 与旧 memory 冲突或更具体时，LLM tool call 为 `UPDATE`，系统更新目标 memory。
+- 用户明确取消偏好时，LLM tool call 为 `DELETE`，系统软删除目标 memory。
+- LLM 返回非法 action、缺失 `memory_id`、或 target 不在 top-s 结果中时，触发 fallback。
+- soft-deleted memory 不会出现在默认 retrieval 结果中。
+- Retriever top-k、threshold 和 recency decay 排序。
+- Agent prompt builder 按 `MEMORY_MAX_CONTEXT_TOKENS` 截断 memories。
 
 ### 13.2 集成测试
 
@@ -671,15 +901,30 @@ Expected:
 retriever returns communication preference memory.
 agent prompt includes retrieved memory.
 assistant response mentions Chinese and concise/direct style.
+
+Turn 4:
+User: 不要再记住我的回答风格偏好。
+
+Expected:
+memory updater marks the matching preference memory invalid.
+default retrieval no longer returns that invalid memory.
+
+Turn 5:
+User: 我现在偏好什么回答方式？
+
+Expected:
+when old and new relevant memories both exist, recency decay ranks the newer valid memory higher.
 ```
 
 ### 13.3 回归测试
 
 - 同一句偏好重复出现不会新增多条重复 memory。
 - 用户说“不要再记住我喜欢 X”时能删除对应 memory。
+- invalid memory 默认不会被 query-time retrieval 返回。
 - user A 的 query 不会检索到 user B 的 memory。
 - 空数据库时 agent 能正常回答。
 - LLM extraction 返回非法 JSON 时主流程不中断。
+- LLM decision tool call 返回非法 JSON 或非法 tool name 时主流程不中断。
 
 ## 14. Demo 验收脚本
 
@@ -727,6 +972,7 @@ print(agent.list_memories())
 - 使用 similarity threshold。
 - 对高相似内容做 `NOOP` 或 `UPDATE`。
 - 定期增加 memory compaction 任务。
+- MVP 不把 compaction 放在关键路径；先通过 `NOOP`、`UPDATE` 和 soft delete 控制增长。
 
 ### 15.3 错误更新
 
@@ -738,7 +984,8 @@ print(agent.list_memories())
 
 - MVP 中只更新 top-1 高相似 memory。
 - 更新时保留 metadata 的 update history。
-- 后续引入 LLM decision reason 方便调试。
+- LLM tool-call decision 必须返回 reason，便于调试。
+- contradiction detector 放入 Phase 2，仅在基础链路稳定后增加。
 
 ### 15.4 隐私和敏感信息
 
@@ -757,10 +1004,14 @@ print(agent.list_memories())
 ### Phase 2
 
 - 使用 Chroma、Qdrant 或 pgvector 替换本地 numpy 检索。
+- 将 embedding 从 JSON TEXT 优化为 float32 BLOB 存储。
+- 增加 Hybrid Retrieval：BM25 + Vector + Recency decay + RRF。
 - 增加 LLM reranker。
-- 增加 LLM-based update decision。
+- 增加 Cross-encoder reranker。
+- 增加 contradiction detector。
 - 增加 memory merge / compaction。
 - 增加 memory importance score。
+- 增加 memory max-per-user 容量上限和 eviction 策略。
 - 支持 memory expiration。
 
 ### Phase 3
@@ -824,4 +1075,3 @@ pytest
 - 后续 query 能检索到该 memory。
 - prompt 中能看到该 memory。
 - assistant 最终回答能利用该 memory。
-

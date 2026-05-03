@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         default="./data/longmemeval_eval.sqlite3",
         help="Temporary SQLite path for the benchmark run.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip question_ids already present in the output jsonl and keep the existing DB.",
+    )
     return parser.parse_args()
 
 
@@ -72,6 +77,24 @@ def load_examples(path: str, limit: int | None, question_types: list[str] | None
     return examples
 
 
+def load_completed_question_ids(output_path: Path) -> set[str]:
+    if not output_path.exists():
+        return set()
+    completed: set[str] = set()
+    with output_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            question_id = item.get("question_id")
+            if question_id:
+                completed.add(str(question_id))
+    return completed
+
+
 def index_example(
     store: MemoryStore,
     embedding_client: HashEmbeddingClient | OpenAIEmbeddingClient,
@@ -82,6 +105,7 @@ def index_example(
     sessions = example.get("haystack_sessions", [])
     session_ids = example.get("haystack_session_ids", [])
     dates = example.get("haystack_dates", [])
+    records: list[dict[str, str]] = []
 
     for session_index, session in enumerate(sessions):
         session_id = str(session_ids[session_index]) if session_index < len(session_ids) else str(session_index)
@@ -89,21 +113,48 @@ def index_example(
 
         if granularity == "session":
             content = format_session(session_id, date, session)
-            add_memory(store, embedding_client, user_id, content, session_id, date, "session")
+            records.append(
+                {
+                    "content": content,
+                    "session_id": session_id,
+                    "date": date,
+                    "granularity": "session",
+                }
+            )
             continue
 
         for turn_index, turn in enumerate(session):
             content = format_turn(session_id, date, turn_index, turn)
-            add_memory(store, embedding_client, user_id, content, session_id, date, "turn")
+            records.append(
+                {
+                    "content": content,
+                    "session_id": session_id,
+                    "date": date,
+                    "granularity": "turn",
+                }
+            )
+
+    contents = [record["content"] for record in records]
+    embeddings = embedding_client.embed_many(contents)
+    for record, embedding in zip(records, embeddings):
+        add_memory(
+            store=store,
+            user_id=user_id,
+            content=record["content"],
+            embedding=embedding,
+            session_id=record["session_id"],
+            date=record["date"],
+            granularity=record["granularity"],
+        )
 
     return user_id
 
 
 def add_memory(
     store: MemoryStore,
-    embedding_client: HashEmbeddingClient | OpenAIEmbeddingClient,
     user_id: str,
     content: str,
+    embedding: list[float],
     session_id: str,
     date: str,
     granularity: str,
@@ -113,7 +164,7 @@ def add_memory(
             memory_id=stable_id("lme"),
             user_id=user_id,
             content=content,
-            embedding=embedding_client.embed(content),
+            embedding=embedding,
             metadata={
                 "benchmark": "longmemeval",
                 "session_id": session_id,
@@ -176,22 +227,36 @@ def main() -> None:
         raise SystemExit("Set MEMORY_LLM_PROVIDER=openai before running LongMemEval generation.")
 
     db_path = Path(args.db_path)
-    if db_path.exists():
+    if db_path.exists() and not args.resume:
         db_path.unlink()
 
     examples = load_examples(args.data, args.limit, args.question_type)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    completed = load_completed_question_ids(output_path) if args.resume else set()
+    if completed:
+        print(f"Resume mode: skipping {len(completed)} completed question_ids")
 
     store = MemoryStore(str(db_path))
     embedding_client = build_embedding_client(config)
     retriever = MemoryRetriever(store, embedding_client, min_score=args.min_score)
     llm_client = OpenAILLMClient(model=config.llm_model, api_key=config.openai_api_key)
 
-    with output_path.open("w", encoding="utf-8") as output_file:
+    mode = "a" if args.resume else "w"
+    with output_path.open(mode, encoding="utf-8") as output_file:
         for index, example in enumerate(examples, start=1):
             question_id = str(example["question_id"])
+            if question_id in completed:
+                print(f"[{index}/{len(examples)}] skipping completed {question_id}")
+                continue
+            sessions = len(example.get("haystack_sessions", []))
+            turns = sum(len(session) for session in example.get("haystack_sessions", []))
+            print(
+                f"[{index}/{len(examples)}] indexing {question_id}: "
+                f"{sessions} sessions, {turns} turns"
+            )
             user_id = index_example(store, embedding_client, example, args.granularity)
+            print(f"[{index}/{len(examples)}] retrieving and answering {question_id}")
             retrieved = retriever.retrieve(
                 user_id=user_id,
                 query=str(example["question"]),
