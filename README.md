@@ -42,6 +42,7 @@ isla_memory/
 scripts/
   demo_chat.py
   demo_openai_chat.py
+  run_longmemeval.py
   reset_memory_db.py
 
 tests/
@@ -177,3 +178,24 @@ print(agent.list_memories())
 ## Project Plan
 
 详细 milestone、模块边界、验收标准见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。
+
+## LongMemEval
+
+本项目提供一个最小 LongMemEval hypothesis 生成脚本：
+
+```bash
+python scripts/run_longmemeval.py \
+  --data ../LongMemEval/data/longmemeval_oracle.json \
+  --output data/longmemeval_outputs/isla_oracle_10.jsonl \
+  --limit 10 \
+  --top-k 5 \
+  --granularity session
+```
+
+脚本输出官方评测脚本需要的 jsonl：
+
+```json
+{"question_id": "...", "hypothesis": "..."}
+```
+
+建议先用 `longmemeval_oracle.json` 和 `--limit 10` 做 smoke test，再扩大到 500 条。完整 QA accuracy 需要使用 LongMemEval 官方仓库的 `src/evaluation/evaluate_qa.py` 进行 LLM judge。
