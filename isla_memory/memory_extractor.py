@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from isla_memory.models import CandidateMemory, Message
@@ -223,3 +224,129 @@ def extract_memories(
         current_user_message=current_user_message,
         current_assistant_message=current_assistant_message,
     )
+
+
+class OpenAIMemoryExtractor:
+    def __init__(
+        self,
+        model: str = "gpt-4.1-mini",
+        api_key: str | None = None,
+        fallback_extractor: RuleBasedMemoryExtractor | None = None,
+    ) -> None:
+        self.model = model
+        self.fallback_extractor = fallback_extractor or RuleBasedMemoryExtractor()
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                'OpenAI extractor requires the "openai" package. '
+                'Install it with: pip install -e ".[openai]"'
+            ) from exc
+        self.client = OpenAI(api_key=api_key)
+
+    def extract_memories(
+        self,
+        user_id: str,
+        recent_messages: list[Message],
+        current_user_message: Message,
+        current_assistant_message: Message | None = None,
+    ) -> list[CandidateMemory]:
+        if self.fallback_extractor._looks_like_question(current_user_message.content):
+            return []
+
+        prompt = self._build_prompt(recent_messages, current_user_message, current_assistant_message)
+        try:
+            response = self.client.responses.create(
+                model=self.model,
+                input=prompt,
+            )
+            output_text = getattr(response, "output_text", "") or str(response)
+            return self._parse_candidates(output_text, current_user_message.message_id)
+        except Exception:
+            return self.fallback_extractor.extract_memories(
+                user_id=user_id,
+                recent_messages=recent_messages,
+                current_user_message=current_user_message,
+                current_assistant_message=current_assistant_message,
+            )
+
+    @staticmethod
+    def _build_prompt(
+        recent_messages: list[Message],
+        current_user_message: Message,
+        current_assistant_message: Message | None,
+    ) -> str:
+        del current_assistant_message
+        user_messages = [message for message in recent_messages[-10:] if message.role == "user"]
+        payload = {
+            "recent_user_messages": [message.to_dict() for message in user_messages],
+            "current_user_message": current_user_message.to_dict(),
+        }
+        return f"""You extract long-term user memories from conversation.
+
+Extract memories only from user-authored messages.
+Never extract memories from assistant-generated content.
+Only extract information that is likely to be useful in future conversations.
+Do not extract one-off tasks, temporary context, or trivial statements.
+If the current user message is asking what the assistant remembers, return an empty memories list.
+Avoid sensitive personal data unless the user explicitly asks the assistant to remember it.
+
+Return JSON only with this schema:
+{{
+  "memories": [
+    {{
+      "content": "...",
+      "memory_type": "preference|fact|goal|constraint|profile|other",
+      "confidence": 0.0,
+      "source_message_id": "...",
+      "metadata": {{}}
+    }}
+  ]
+}}
+
+Conversation payload:
+{json.dumps(payload, ensure_ascii=False)}
+"""
+
+    @staticmethod
+    def _parse_candidates(output_text: str, default_source_message_id: str) -> list[CandidateMemory]:
+        data = json.loads(OpenAIMemoryExtractor._extract_json(output_text))
+        raw_memories = data.get("memories", [])
+        if not isinstance(raw_memories, list):
+            return []
+
+        candidates: list[CandidateMemory] = []
+        for item in raw_memories:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            memory_type = str(item.get("memory_type", "other"))
+            if memory_type not in {"preference", "fact", "goal", "constraint", "profile", "other"}:
+                memory_type = "other"
+            metadata = item.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            candidates.append(
+                CandidateMemory(
+                    content=content,
+                    memory_type=memory_type,  # type: ignore[arg-type]
+                    confidence=float(item.get("confidence", 0.0)),
+                    source_message_id=item.get("source_message_id") or default_source_message_id,
+                    metadata=metadata,
+                )
+            )
+        return candidates
+
+    @staticmethod
+    def _extract_json(output_text: str) -> str:
+        stripped = output_text.strip()
+        if stripped.startswith("```"):
+            match = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
+            if match:
+                return match.group(1)
+        match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if match:
+            return match.group(0)
+        return stripped

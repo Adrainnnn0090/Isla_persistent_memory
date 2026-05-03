@@ -19,6 +19,12 @@ def build_augmented_prompt(
 Relevant user memories:
 {memory_lines}
 
+Memory usage rules:
+- If a memory describes the user's communication or answer style, follow it as a standing preference.
+- Do not restate memories unless the user asks about them.
+- If the current message is only a statement or status update, acknowledge briefly instead of giving a full tutorial.
+- Keep the answer concise by default.
+
 Current question:
 {user_message}
 

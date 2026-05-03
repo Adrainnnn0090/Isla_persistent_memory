@@ -46,3 +46,36 @@ class RuleBasedLLMClient:
             return f"结合已知记忆：{memory_text}。我会据此回答当前问题。"
 
         return "我明白了。"
+
+
+class OpenAILLMClient:
+    def __init__(
+        self,
+        model: str = "gpt-4.1-mini",
+        api_key: str | None = None,
+    ) -> None:
+        self.model = model
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                'OpenAI provider requires the "openai" package. '
+                'Install it with: pip install -e ".[openai]"'
+            ) from exc
+        self.client = OpenAI(api_key=api_key)
+
+    def generate(
+        self,
+        prompt: str,
+        user_message: str,
+        relevant_memories: Sequence[Memory],
+    ) -> str:
+        del user_message, relevant_memories
+        response = self.client.responses.create(
+            model=self.model,
+            input=prompt,
+        )
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return str(output_text)
+        return str(response)

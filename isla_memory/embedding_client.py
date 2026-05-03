@@ -68,3 +68,27 @@ class HashEmbeddingClient:
     def _cjk_bigrams(text: str) -> list[str]:
         chars = re.findall(r"[\u4e00-\u9fff]", text)
         return [chars[index] + chars[index + 1] for index in range(len(chars) - 1)]
+
+
+class OpenAIEmbeddingClient:
+    def __init__(
+        self,
+        model: str = "text-embedding-3-small",
+        api_key: str | None = None,
+    ) -> None:
+        self.model = model
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                'OpenAI provider requires the "openai" package. '
+                'Install it with: pip install -e ".[openai]"'
+            ) from exc
+        self.client = OpenAI(api_key=api_key)
+
+    def embed(self, text: str) -> list[float]:
+        response = self.client.embeddings.create(
+            model=self.model,
+            input=text,
+        )
+        return list(response.data[0].embedding)

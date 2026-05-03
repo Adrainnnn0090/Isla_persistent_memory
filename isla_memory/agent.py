@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from isla_memory.config import MemoryConfig
-from isla_memory.embedding_client import EmbeddingClient, HashEmbeddingClient
-from isla_memory.llm_client import LLMClient, RuleBasedLLMClient
-from isla_memory.memory_extractor import RuleBasedMemoryExtractor
+from isla_memory.embedding_client import EmbeddingClient, HashEmbeddingClient, OpenAIEmbeddingClient
+from isla_memory.llm_client import LLMClient, OpenAILLMClient, RuleBasedLLMClient
+from isla_memory.memory_extractor import OpenAIMemoryExtractor, RuleBasedMemoryExtractor
 from isla_memory.memory_retriever import MemoryRetriever
 from isla_memory.memory_store import MemoryStore
 from isla_memory.memory_updater import MemoryUpdater
@@ -26,11 +26,9 @@ class MemoryAgent:
     ) -> None:
         self.user_id = user_id
         self.config = config or MemoryConfig.from_env()
-        self.embedding_client = embedding_client or HashEmbeddingClient(
-            dimension=self.config.hash_embedding_dimension
-        )
+        self.embedding_client = embedding_client or self._build_embedding_client(self.config)
         self.store = store or MemoryStore(self.config.db_path)
-        self.extractor = RuleBasedMemoryExtractor()
+        self.extractor = self._build_extractor(self.config)
         self.updater = MemoryUpdater(
             store=self.store,
             embedding_client=self.embedding_client,
@@ -43,7 +41,7 @@ class MemoryAgent:
             embedding_client=self.embedding_client,
             min_score=self.config.min_score,
         )
-        self.llm_client = llm_client or RuleBasedLLMClient()
+        self.llm_client = llm_client or self._build_llm_client(self.config)
         self.recent_messages = list(recent_messages or [])
         self.last_prompt = ""
         self.last_decisions: list[MemoryDecision] = []
@@ -93,3 +91,36 @@ class MemoryAgent:
 
     def list_memories(self, include_invalid: bool = False) -> list[Memory]:
         return self.store.list_memories(self.user_id, include_invalid=include_invalid)
+
+    @staticmethod
+    def _build_embedding_client(config: MemoryConfig) -> EmbeddingClient:
+        if config.embedding_provider == "openai":
+            return OpenAIEmbeddingClient(
+                model=config.embedding_model,
+                api_key=config.openai_api_key,
+            )
+        if config.embedding_provider != "hash":
+            raise ValueError(f"Unsupported embedding provider: {config.embedding_provider}")
+        return HashEmbeddingClient(dimension=config.hash_embedding_dimension)
+
+    @staticmethod
+    def _build_llm_client(config: MemoryConfig) -> LLMClient:
+        if config.llm_provider == "openai":
+            return OpenAILLMClient(
+                model=config.llm_model,
+                api_key=config.openai_api_key,
+            )
+        if config.llm_provider != "rules":
+            raise ValueError(f"Unsupported LLM provider: {config.llm_provider}")
+        return RuleBasedLLMClient()
+
+    @staticmethod
+    def _build_extractor(config: MemoryConfig) -> RuleBasedMemoryExtractor | OpenAIMemoryExtractor:
+        if config.extractor_provider == "openai":
+            return OpenAIMemoryExtractor(
+                model=config.extractor_model,
+                api_key=config.openai_api_key,
+            )
+        if config.extractor_provider != "rules":
+            raise ValueError(f"Unsupported extractor provider: {config.extractor_provider}")
+        return RuleBasedMemoryExtractor()

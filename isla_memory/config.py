@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_DB_PATH = "./data/memory.sqlite3"
+DEFAULT_LLM_PROVIDER = "rules"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_EMBEDDING_PROVIDER = "hash"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_EXTRACTOR_PROVIDER = "rules"
+DEFAULT_EXTRACTOR_MODEL = "gpt-4.1-mini"
 DEFAULT_TOP_K = 5
 DEFAULT_MIN_SCORE = 0.35
 DEFAULT_DEDUP_SCORE = 0.90
@@ -34,6 +40,13 @@ def _get_value(file_values: dict[str, str], key: str, default: str) -> str:
 @dataclass(frozen=True, slots=True)
 class MemoryConfig:
     db_path: str = DEFAULT_DB_PATH
+    openai_api_key: str | None = None
+    llm_provider: str = DEFAULT_LLM_PROVIDER
+    llm_model: str = DEFAULT_LLM_MODEL
+    embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    extractor_provider: str = DEFAULT_EXTRACTOR_PROVIDER
+    extractor_model: str = DEFAULT_EXTRACTOR_MODEL
     top_k: int = DEFAULT_TOP_K
     min_score: float = DEFAULT_MIN_SCORE
     dedup_score: float = DEFAULT_DEDUP_SCORE
@@ -46,6 +59,29 @@ class MemoryConfig:
         file_values = _read_env_file(env_file)
         return cls(
             db_path=_get_value(file_values, "MEMORY_DB_PATH", DEFAULT_DB_PATH),
+            openai_api_key=_get_value(file_values, "OPENAI_API_KEY", "") or None,
+            llm_provider=_get_value(file_values, "MEMORY_LLM_PROVIDER", DEFAULT_LLM_PROVIDER),
+            llm_model=_get_value(file_values, "MEMORY_LLM_MODEL", DEFAULT_LLM_MODEL),
+            embedding_provider=_get_value(
+                file_values,
+                "MEMORY_EMBEDDING_PROVIDER",
+                DEFAULT_EMBEDDING_PROVIDER,
+            ),
+            embedding_model=_get_value(
+                file_values,
+                "MEMORY_EMBEDDING_MODEL",
+                DEFAULT_EMBEDDING_MODEL,
+            ),
+            extractor_provider=_get_value(
+                file_values,
+                "MEMORY_EXTRACTOR_PROVIDER",
+                DEFAULT_EXTRACTOR_PROVIDER,
+            ),
+            extractor_model=_get_value(
+                file_values,
+                "MEMORY_EXTRACTOR_MODEL",
+                DEFAULT_EXTRACTOR_MODEL,
+            ),
             top_k=int(_get_value(file_values, "MEMORY_TOP_K", str(DEFAULT_TOP_K))),
             min_score=float(_get_value(file_values, "MEMORY_MIN_SCORE", str(DEFAULT_MIN_SCORE))),
             dedup_score=float(_get_value(file_values, "MEMORY_DEDUP_SCORE", str(DEFAULT_DEDUP_SCORE))),

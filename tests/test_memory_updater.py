@@ -53,6 +53,30 @@ class MemoryUpdaterTest(unittest.TestCase):
             self.assertEqual(store.list_memories("u1"), [])
             self.assertEqual(len(store.list_memories("u1", include_invalid=True)), 1)
 
+    def test_openai_style_candidate_without_topic_still_merges_communication_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            embedding = HashEmbeddingClient()
+            store = MemoryStore(str(Path(tmp_dir) / "memory.sqlite3"))
+            updater = MemoryUpdater(store, embedding, update_score=0.30)
+
+            first = CandidateMemory(
+                content="用户偏好技术问题用中文直接回答。",
+                memory_type="preference",
+                confidence=0.95,
+            )
+            second = CandidateMemory(
+                content="用户希望以后技术问题用中文直接回答，回答要简洁明了。",
+                memory_type="preference",
+                confidence=0.95,
+            )
+
+            updater.update_memories("u1", [first])
+            decision = updater.update_memories("u1", [second])[0]
+            memory = store.list_memories("u1")[0]
+
+            self.assertEqual(decision.action, "UPDATE")
+            self.assertEqual(memory.content, "用户偏好用中文、直接、简洁地回答技术问题。")
+
 
 if __name__ == "__main__":
     unittest.main()

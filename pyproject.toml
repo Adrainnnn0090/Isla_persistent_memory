@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+openai = ["openai>=1.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["isla_memory*"]

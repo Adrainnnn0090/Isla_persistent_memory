@@ -167,10 +167,17 @@ class MemoryUpdater:
             longer = max((existing.content, candidate.content), key=len)
             return longer
 
-        if existing.metadata.get("topic") == "communication" or candidate.metadata.get("topic") == "communication":
+        if self._is_communication_memory(existing, candidate):
             return self._merge_communication_content(existing.content, candidate.content)
 
         return f"{existing.content.rstrip('。')}；{candidate.content.rstrip('。')}。"
+
+    @staticmethod
+    def _is_communication_memory(existing: Memory, candidate: CandidateMemory) -> bool:
+        if existing.metadata.get("topic") == "communication" or candidate.metadata.get("topic") == "communication":
+            return True
+        combined = f"{existing.content} {candidate.content}"
+        return contains_any(combined, ("回答", "回复", "解释", "用中文", "用英文", "简洁", "直接"))
 
     @staticmethod
     def _merge_communication_content(existing_content: str, candidate_content: str) -> str:

@@ -22,6 +22,7 @@ class AgentE2ETest(unittest.TestCase):
             self.assertGreaterEqual(len(memories), 2)
             self.assertIn("用中文", response)
             self.assertIn("Relevant user memories", agent.last_prompt)
+            self.assertIn("standing preference", agent.last_prompt)
             self.assertTrue(agent.last_retrieved_memories)
 
 

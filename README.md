@@ -41,6 +41,7 @@ isla_memory/
 
 scripts/
   demo_chat.py
+  demo_openai_chat.py
   reset_memory_db.py
 
 tests/
@@ -91,6 +92,13 @@ pytest
 
 ```text
 MEMORY_DB_PATH=./data/memory.sqlite3
+OPENAI_API_KEY=
+MEMORY_LLM_PROVIDER=rules
+MEMORY_LLM_MODEL=gpt-4.1-mini
+MEMORY_EMBEDDING_PROVIDER=hash
+MEMORY_EMBEDDING_MODEL=text-embedding-3-small
+MEMORY_EXTRACTOR_PROVIDER=rules
+MEMORY_EXTRACTOR_MODEL=gpt-4.1-mini
 MEMORY_TOP_K=5
 MEMORY_MIN_SCORE=0.35
 MEMORY_DEDUP_SCORE=0.90
@@ -106,6 +114,51 @@ HASH_EMBEDDING_DIMENSION=256
 - `MemoryStore`
 - `MemoryRetriever`
 - `MemoryUpdater`
+
+## 使用真实 OpenAI API
+
+安装可选依赖：
+
+```bash
+pip install -e ".[openai]"
+```
+
+配置 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+然后填入：
+
+```text
+OPENAI_API_KEY=你的_key
+MEMORY_LLM_PROVIDER=openai
+MEMORY_LLM_MODEL=gpt-4.1-mini
+MEMORY_EMBEDDING_PROVIDER=openai
+MEMORY_EMBEDDING_MODEL=text-embedding-3-small
+MEMORY_EXTRACTOR_PROVIDER=openai
+MEMORY_EXTRACTOR_MODEL=gpt-4.1-mini
+```
+
+运行真实 API demo：
+
+```bash
+python scripts/demo_openai_chat.py
+```
+
+这个脚本会使用：
+
+- OpenAI embedding 生成 query 和 memory 向量。
+- OpenAI model 生成 assistant response。
+- OpenAI model 从对话中抽取 candidate memories。
+- SQLite 保存 memory，并在后续 query 时做相似度检索。
+
+如果只想真实生成回答，但 memory extraction 仍用本地规则，可以把：
+
+```text
+MEMORY_EXTRACTOR_PROVIDER=rules
+```
 
 ## Python 用法
 

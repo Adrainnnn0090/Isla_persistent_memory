@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from isla_memory.memory_extractor import extract_memories
+from isla_memory.memory_extractor import OpenAIMemoryExtractor, extract_memories
 from isla_memory.models import Message
 from isla_memory.utils import stable_id
 
@@ -44,6 +44,25 @@ class MemoryExtractorTest(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertTrue(candidates[0].is_delete_intent)
+
+    def test_openai_prompt_excludes_assistant_content(self) -> None:
+        user_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="user",
+            content="我正在做一个类似 mem0 的简易长期记忆系统。",
+        )
+        assistant_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="assistant",
+            content="这里是一大段 assistant 生成的建议，不应该被抽取成用户记忆。",
+        )
+
+        prompt = OpenAIMemoryExtractor._build_prompt([], user_message, assistant_message)
+
+        self.assertIn("current_user_message", prompt)
+        self.assertNotIn("assistant 生成的建议", prompt)
 
 
 if __name__ == "__main__":
