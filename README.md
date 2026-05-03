@@ -1,6 +1,9 @@
 # Isla Persistent Memory
 
-一个受 mem0 启发的简易长期记忆系统 MVP。当前版本不依赖外部 API，默认使用规则抽取、SQLite 持久化和本地 hash embedding，目的是先把完整链路跑通：
+> 一个受 **mem0** 启发、以《可塑性记忆》中的 Isla 为初心的长期记忆系统实验项目。  
+> 目标不是复刻动画里的奇迹，而是认真拆解：一个 AI agent 如何抽取、维护、检索并使用属于用户的长期记忆。
+
+Isla 当前是一个可运行的 memory MVP：它能从对话中抽取候选记忆，写入本地 SQLite，使用 embedding 做相似度检索，并在后续回答前把相关记忆注入 prompt。默认模式可离线运行；也可以切换到 OpenAI API 做真实 LLM 回复、memory extraction 和 embedding。
 
 ```text
 Conversation Input
@@ -12,37 +15,37 @@ Conversation Input
   -> LLM Response
 ```
 
-## 功能
+## 当前能力
 
-- 从用户对话中抽取长期 memory candidate。
-- 保存 memory 到 SQLite。
-- 保存 embedding 并支持相似度检索。
-- 支持 `ADD`、`UPDATE`、`DELETE`、`NOOP`。
-- `DELETE` 是软删除：标记 `invalid_at`，不物理删除。
-- 新 query 到来时检索 relevant memories。
-- 将 retrieved memories 注入 prompt。
-- 提供可直接运行的 demo。
+- 从用户对话中抽取长期有用的 candidate memories。
+- 使用 SQLite 持久化 memory、metadata、embedding 和软删除状态。
+- 支持 `ADD`、`UPDATE`、`DELETE`、`NOOP` 记忆更新动作。
+- `DELETE` 采用 soft delete：标记 `invalid_at`，不物理删除，方便后续 temporal reasoning。
+- query-time 使用 embedding 检索 relevant memories。
+- 将 retrieved memories 注入 prompt 的 `Relevant user memories` 区域。
+- 支持离线规则 demo，也支持 OpenAI API demo。
+- 提供 LongMemEval hypothesis 生成脚本，用于科研评测链路。
 
-## 目录结构
+## 项目结构
 
 ```text
 isla_memory/
-  agent.py
-  config.py
-  embedding_client.py
-  llm_client.py
-  memory_extractor.py
-  memory_retriever.py
-  memory_store.py
-  memory_updater.py
-  models.py
-  prompts.py
+  agent.py                # 对话主编排：retrieve -> prompt -> response -> memory update
+  config.py               # .env 配置
+  embedding_client.py     # hash / OpenAI embedding client
+  llm_client.py           # rules / OpenAI response client
+  memory_extractor.py     # 从对话中抽取 candidate memories
+  memory_retriever.py     # query-time memory retrieval
+  memory_store.py         # SQLite persistence + similarity search
+  memory_updater.py       # ADD / UPDATE / DELETE / NOOP
+  models.py               # Message / Memory / CandidateMemory / MemoryDecision
+  prompts.py              # prompt augmentation
   utils.py
 
 scripts/
-  demo_chat.py
-  demo_openai_chat.py
-  run_longmemeval.py
+  demo_chat.py            # 离线 MVP demo
+  demo_openai_chat.py     # OpenAI API demo
+  run_longmemeval.py      # LongMemEval hypothesis generation
   reset_memory_db.py
 
 tests/
@@ -53,70 +56,38 @@ tests/
   test_memory_updater.py
 ```
 
-## 快速开始
+## 快速开始：离线模式
+
+离线模式不需要 API key。它使用规则型抽取、规则型回复和本地 hash embedding，适合先确认完整链路。
 
 ```bash
 python scripts/reset_memory_db.py
 python scripts/demo_chat.py
 ```
 
-Demo 会执行三轮对话：
-
-1. 用户要求以后用中文、直接地回答技术问题。
-2. 用户说明正在做类似 mem0 的长期记忆系统。
-3. 用户询问自己刚才告诉过什么回答风格偏好。
-
-期望结果：
-
-- 第一轮后写入回答风格 memory。
-- 第二轮后写入项目背景 memory。
-- 第三轮会检索出回答风格 memory，并把它放进 prompt。
-
-## 测试
-
-不安装额外依赖也可以运行：
-
-```bash
-python -m unittest discover -s tests
-```
-
-如果安装了 dev 依赖，也可以运行：
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-## 配置
-
-复制 `.env.example` 到 `.env` 后可调整阈值：
+demo 会执行三轮对话：
 
 ```text
-MEMORY_DB_PATH=./data/memory.sqlite3
-OPENAI_API_KEY=
-MEMORY_LLM_PROVIDER=rules
-MEMORY_LLM_MODEL=gpt-4.1-mini
-MEMORY_EMBEDDING_PROVIDER=hash
-MEMORY_EMBEDDING_MODEL=text-embedding-3-small
-MEMORY_EXTRACTOR_PROVIDER=rules
-MEMORY_EXTRACTOR_MODEL=gpt-4.1-mini
-MEMORY_TOP_K=5
-MEMORY_MIN_SCORE=0.35
-MEMORY_DEDUP_SCORE=0.90
-MEMORY_UPDATE_SCORE=0.62
-MEMORY_MIN_CONFIDENCE=0.65
-HASH_EMBEDDING_DIMENSION=256
+User: 以后请用中文回答技术问题，回答直接一点。
+Assistant: 好的，我会按这个偏好来回答。
+Memory decision: ADD | 用户偏好用中文、直接、简洁地回答技术问题。
+
+User: 我正在做一个类似 mem0 的简易长期记忆系统。
+Assistant: 明白，我会把这个项目背景作为后续上下文。
+Memory decision: ADD | 用户正在做一个类似 mem0 的简易长期记忆系统。
+
+User: 我刚才告诉过你我的回答风格偏好吗？
+Assistant: 你告诉过我：用户偏好用中文、直接、简洁地回答技术问题。
 ```
 
-当前默认 embedding 是 `HashEmbeddingClient`，用于离线 demo 和测试。生产化时建议替换为真实 embedding model 和向量数据库，但业务层接口已经拆开：
+重点观察：
 
-- `EmbeddingClient`
-- `LLMClient`
-- `MemoryStore`
-- `MemoryRetriever`
-- `MemoryUpdater`
+- 第一轮写入回答风格偏好。
+- 第二轮写入项目背景。
+- 第三轮通过 query-time retrieval 找回第一轮 memory。
+- `agent.last_prompt` 中能看到 `Relevant user memories`。
 
-## 使用真实 OpenAI API
+## 使用 OpenAI API
 
 安装可选依赖：
 
@@ -124,16 +95,16 @@ HASH_EMBEDDING_DIMENSION=256
 pip install -e ".[openai]"
 ```
 
-配置 `.env`：
+复制配置：
 
 ```bash
 cp .env.example .env
 ```
 
-然后填入：
+填写 `.env`：
 
 ```text
-OPENAI_API_KEY=你的_key
+OPENAI_API_KEY=your_openai_api_key_here
 MEMORY_LLM_PROVIDER=openai
 MEMORY_LLM_MODEL=gpt-4.1-mini
 MEMORY_EMBEDDING_PROVIDER=openai
@@ -148,14 +119,15 @@ MEMORY_EXTRACTOR_MODEL=gpt-4.1-mini
 python scripts/demo_openai_chat.py
 ```
 
-这个脚本会使用：
+这个脚本会真实调用 API 完成：
 
-- OpenAI embedding 生成 query 和 memory 向量。
-- OpenAI model 生成 assistant response。
-- OpenAI model 从对话中抽取 candidate memories。
-- SQLite 保存 memory，并在后续 query 时做相似度检索。
+- LLM 回复。
+- 对话中的 candidate memory extraction。
+- query 和 memory 的 embedding。
+- SQLite 持久化。
+- 后续 query 的 memory retrieval 和 prompt augmentation。
 
-如果只想真实生成回答，但 memory extraction 仍用本地规则，可以把：
+如果只想让回答走 OpenAI，但 memory extraction 保持本地规则，配置：
 
 ```text
 MEMORY_EXTRACTOR_PROVIDER=rules
@@ -169,33 +141,125 @@ from isla_memory import MemoryAgent
 agent = MemoryAgent(user_id="user_123")
 
 agent.chat("以后请用中文回答技术问题，回答直接一点。")
+agent.chat("我正在做一个类似 mem0 的简易长期记忆系统。")
 response = agent.chat("我刚才告诉过你我的回答风格偏好吗？")
 
 print(response)
 print(agent.list_memories())
+print(agent.last_prompt)
 ```
 
-## Project Plan
+## 配置项
 
-详细 milestone、模块边界、验收标准见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。
+基础配置：
 
-## LongMemEval
+```text
+MEMORY_DB_PATH=./data/memory.sqlite3
+MEMORY_TOP_K=5
+MEMORY_MIN_SCORE=0.35
+MEMORY_DEDUP_SCORE=0.90
+MEMORY_UPDATE_SCORE=0.62
+MEMORY_MIN_CONFIDENCE=0.65
+HASH_EMBEDDING_DIMENSION=256
+```
 
-本项目提供一个最小 LongMemEval hypothesis 生成脚本：
+Provider 配置：
+
+```text
+MEMORY_LLM_PROVIDER=rules|openai
+MEMORY_EMBEDDING_PROVIDER=hash|openai
+MEMORY_EXTRACTOR_PROVIDER=rules|openai
+```
+
+当前默认 embedding 是 `HashEmbeddingClient`，用于离线 demo 和测试。真实实验建议使用更稳定的 embedding provider，并为不同 embedding 模型使用不同数据库，避免向量维度和相似度分布混用。
+
+## 测试
+
+本项目的默认测试不会调用 OpenAI API，不会产生 API 费用。
+
+```bash
+python -m unittest discover -s tests
+```
+
+如果安装了 dev 依赖：
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+## LongMemEval 评测
+
+Isla 提供一个 LongMemEval hypothesis 生成脚本，用于把当前 memory retrieval + LLM answering 链路接到官方评测脚本。
+
+先生成小样本：
 
 ```bash
 python scripts/run_longmemeval.py \
   --data ../LongMemEval/data/longmemeval_oracle.json \
   --output data/longmemeval_outputs/isla_oracle_10.jsonl \
   --limit 10 \
-  --top-k 5 \
-  --granularity session
+  --top-k 10 \
+  --granularity turn
 ```
 
-脚本输出官方评测脚本需要的 jsonl：
+输出格式：
 
 ```json
 {"question_id": "...", "hypothesis": "..."}
 ```
 
-建议先用 `longmemeval_oracle.json` 和 `--limit 10` 做 smoke test，再扩大到 500 条。完整 QA accuracy 需要使用 LongMemEval 官方仓库的 `src/evaluation/evaluate_qa.py` 进行 LLM judge。
+再使用 LongMemEval 官方 `src/evaluation/evaluate_qa.py` 做 LLM judge。建议顺序：
+
+```text
+oracle --limit 1   # 验证环境和 API
+oracle --limit 10  # 验证成本和结果格式
+oracle full        # 500 条完整评测
+```
+
+如果中途断掉，可以使用：
+
+```bash
+python scripts/run_longmemeval.py ... --resume
+```
+
+注意：
+
+- `session` 粒度可能触发 embedding 单条输入长度限制。
+- `turn` 粒度更适合当前 MVP 跑完整 benchmark。
+- `top-k` 越大，回答阶段 prompt token 越多，费用也越高。
+- LongMemEval 生成答案和官方 judge 都可能产生 API 费用。
+
+## 研究路线
+
+当前 Isla 是第一阶段原型，重点是让“记忆生命周期”跑通：
+
+```text
+extract -> decide -> persist -> retrieve -> augment -> respond
+```
+
+下一阶段重点：
+
+- mem0 风格 LLM tool-call memory updater。
+- `memory_type` 与 `invalid_at` 进入一等数据模型。
+- prompt memory token budget。
+- recency-aware retrieval。
+- negation / delete intent 前置识别。
+- mock LLM 测试，保证科研实验可复现。
+- 后续再引入 hybrid retrieval、reranker、compaction、importance score 和更严肃的 benchmark。
+
+完整 milestone 和实现计划见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。
+
+## 项目初心
+
+Isla 这个名字来自《可塑性记忆》。这部作品讨论的是记忆、人格、时间和告别。本项目借这个名字，不是为了浪漫化工程问题，而是提醒自己：长期记忆系统不是“把所有东西存起来”这么简单。
+
+真正难的是：
+
+- 什么值得记住。
+- 什么应该被更新。
+- 什么必须被忘记。
+- 当记忆互相矛盾时，系统如何保持诚实。
+- 当用户改变时，agent 如何跟着改变。
+
+所以 Isla 的目标不是做一个会背数据库的聊天机器人，而是做一个能被观测、能被评测、能被修正的长期记忆研究原型。记忆会被写入，也会被软删除；偏好会被继承，也会被更新。像实验室里安静运行的一台小型 Giftia 维护装置，认真、克制，但始终朝着更接近“理解用户”的方向迭代。
