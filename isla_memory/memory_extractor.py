@@ -72,6 +72,10 @@ class RuleBasedMemoryExtractor:
                 "不再记住",
                 "取消记忆",
                 "删除记忆",
+                "我不想再用",
+                "我改变主意了",
+                "以后不用",
+                "取消",
                 "delete this memory",
                 "forget that",
             ),
@@ -81,6 +85,7 @@ class RuleBasedMemoryExtractor:
     def _extract_delete_target(text: str) -> str:
         patterns = (
             r"(?:不要再记住|别再记住|不再记住|忘记|忘掉|删除记忆|取消记忆)(.*)",
+            r"(?:我不想再用|我改变主意了|以后不用|取消)(.*)",
             r"(?:forget|delete)(.*)",
         )
         for pattern in patterns:
@@ -290,6 +295,12 @@ Only extract information that is likely to be useful in future conversations.
 Do not extract one-off tasks, temporary context, or trivial statements.
 If the current user message is asking what the assistant remembers, return an empty memories list.
 Avoid sensitive personal data unless the user explicitly asks the assistant to remember it.
+If the user negates, cancels, changes, or asks to forget a previous preference or fact, return a DELETE intent candidate instead of a new positive memory.
+DELETE intent examples:
+- "不要再记住我喜欢 X" -> metadata.intent = "delete"
+- "忘记我的项目偏好" -> metadata.intent = "delete"
+- "我不想再用英文回答了" -> metadata.intent = "delete"
+- "我改变主意了，不要简短回答" -> metadata.intent = "delete"
 
 Return JSON only with this schema:
 {{

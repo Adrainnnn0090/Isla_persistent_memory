@@ -13,6 +13,15 @@ DEFAULT_EXTRACTOR_PROVIDER = "rules"
 DEFAULT_EXTRACTOR_MODEL = "gpt-4.1-mini"
 DEFAULT_TOP_K = 5
 DEFAULT_MIN_SCORE = 0.35
+DEFAULT_MAX_CONTEXT_TOKENS = 800
+DEFAULT_RECENCY_HALF_LIFE_DAYS = 30
+DEFAULT_RECENCY_WEIGHT = 0.3
+DEFAULT_SIM_WEIGHT = 0.7
+DEFAULT_UPDATE_STRATEGY = "rules"
+DEFAULT_UPDATE_TOP_S = 5
+DEFAULT_DECISION_MODEL = "gpt-4.1-mini"
+DEFAULT_DECISION_MIN_CONFIDENCE = 0.65
+DEFAULT_DECISION_FALLBACK = "rules"
 DEFAULT_DEDUP_SCORE = 0.90
 DEFAULT_UPDATE_SCORE = 0.62
 DEFAULT_MIN_CONFIDENCE = 0.65
@@ -49,6 +58,15 @@ class MemoryConfig:
     extractor_model: str = DEFAULT_EXTRACTOR_MODEL
     top_k: int = DEFAULT_TOP_K
     min_score: float = DEFAULT_MIN_SCORE
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS
+    recency_half_life_days: int = DEFAULT_RECENCY_HALF_LIFE_DAYS
+    recency_weight: float = DEFAULT_RECENCY_WEIGHT
+    sim_weight: float = DEFAULT_SIM_WEIGHT
+    update_strategy: str = DEFAULT_UPDATE_STRATEGY
+    update_top_s: int = DEFAULT_UPDATE_TOP_S
+    decision_model: str = DEFAULT_DECISION_MODEL
+    decision_min_confidence: float = DEFAULT_DECISION_MIN_CONFIDENCE
+    decision_fallback: str = DEFAULT_DECISION_FALLBACK
     dedup_score: float = DEFAULT_DEDUP_SCORE
     update_score: float = DEFAULT_UPDATE_SCORE
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
@@ -84,6 +102,49 @@ class MemoryConfig:
             ),
             top_k=int(_get_value(file_values, "MEMORY_TOP_K", str(DEFAULT_TOP_K))),
             min_score=float(_get_value(file_values, "MEMORY_MIN_SCORE", str(DEFAULT_MIN_SCORE))),
+            max_context_tokens=int(
+                _get_value(
+                    file_values,
+                    "MEMORY_MAX_CONTEXT_TOKENS",
+                    str(DEFAULT_MAX_CONTEXT_TOKENS),
+                )
+            ),
+            recency_half_life_days=int(
+                _get_value(
+                    file_values,
+                    "MEMORY_RECENCY_HALF_LIFE_DAYS",
+                    str(DEFAULT_RECENCY_HALF_LIFE_DAYS),
+                )
+            ),
+            recency_weight=float(
+                _get_value(file_values, "MEMORY_RECENCY_WEIGHT", str(DEFAULT_RECENCY_WEIGHT))
+            ),
+            sim_weight=float(_get_value(file_values, "MEMORY_SIM_WEIGHT", str(DEFAULT_SIM_WEIGHT))),
+            update_strategy=_get_value(
+                file_values,
+                "MEMORY_UPDATE_STRATEGY",
+                DEFAULT_UPDATE_STRATEGY,
+            ),
+            update_top_s=int(
+                _get_value(file_values, "MEMORY_UPDATE_TOP_S", str(DEFAULT_UPDATE_TOP_S))
+            ),
+            decision_model=_get_value(
+                file_values,
+                "MEMORY_DECISION_MODEL",
+                DEFAULT_DECISION_MODEL,
+            ),
+            decision_min_confidence=float(
+                _get_value(
+                    file_values,
+                    "MEMORY_DECISION_MIN_CONFIDENCE",
+                    str(DEFAULT_DECISION_MIN_CONFIDENCE),
+                )
+            ),
+            decision_fallback=_get_value(
+                file_values,
+                "MEMORY_DECISION_FALLBACK",
+                DEFAULT_DECISION_FALLBACK,
+            ),
             dedup_score=float(_get_value(file_values, "MEMORY_DEDUP_SCORE", str(DEFAULT_DEDUP_SCORE))),
             update_score=float(_get_value(file_values, "MEMORY_UPDATE_SCORE", str(DEFAULT_UPDATE_SCORE))),
             min_confidence=float(

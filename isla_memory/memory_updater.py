@@ -1,11 +1,33 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from isla_memory.embedding_client import EmbeddingClient
 from isla_memory.memory_store import MemoryStore
-from isla_memory.models import CandidateMemory, Memory, MemoryDecision
+from isla_memory.models import CandidateMemory, Memory, MemoryDecision, Message, MemoryType
 from isla_memory.utils import contains_any, normalize_text, stable_id, utc_now
+
+VALID_MEMORY_TYPES: set[str] = {"preference", "fact", "goal", "constraint", "profile", "other"}
+VALID_TOOL_NAMES: dict[str, str] = {
+    "add_memory": "ADD",
+    "update_memory": "UPDATE",
+    "delete_memory": "DELETE",
+    "noop": "NOOP",
+}
+
+
+class MemoryDecisionClient(Protocol):
+    def decide(
+        self,
+        *,
+        candidate: CandidateMemory,
+        retrieved_memories: list[tuple[Memory, float]],
+        current_user_message: Message | None,
+        source_metadata: dict[str, Any],
+    ) -> Mapping[str, Any]:
+        ...
 
 
 class MemoryUpdater:
@@ -16,30 +38,110 @@ class MemoryUpdater:
         min_confidence: float = 0.65,
         dedup_score: float = 0.90,
         update_score: float = 0.62,
+        update_strategy: str = "rules",
+        update_top_s: int = 5,
+        decision_client: MemoryDecisionClient | None = None,
+        decision_min_confidence: float = 0.65,
+        decision_fallback: str = "rules",
     ) -> None:
         self.store = store
         self.embedding_client = embedding_client
         self.min_confidence = min_confidence
         self.dedup_score = dedup_score
         self.update_score = update_score
+        self.update_strategy = update_strategy
+        self.update_top_s = update_top_s
+        self.decision_client = decision_client
+        self.decision_min_confidence = decision_min_confidence
+        self.decision_fallback = decision_fallback
 
     def update_memories(
         self,
         user_id: str,
         candidates: list[CandidateMemory],
+        current_user_message: Message | None = None,
     ) -> list[MemoryDecision]:
-        return [self._apply_candidate(user_id, candidate) for candidate in candidates]
+        return [
+            self._apply_candidate(user_id, candidate, current_user_message)
+            for candidate in candidates
+        ]
 
-    def _apply_candidate(self, user_id: str, candidate: CandidateMemory) -> MemoryDecision:
+    def _apply_candidate(
+        self,
+        user_id: str,
+        candidate: CandidateMemory,
+        current_user_message: Message | None,
+    ) -> MemoryDecision:
         if candidate.confidence < self.min_confidence:
             return MemoryDecision(
                 action="NOOP",
                 candidate=candidate,
+                confidence=candidate.confidence,
                 reason="candidate confidence below threshold",
             )
 
+        if self.update_strategy == "llm_tool_call" and self.decision_client is not None:
+            return self._apply_candidate_with_llm_decision(
+                user_id=user_id,
+                candidate=candidate,
+                current_user_message=current_user_message,
+            )
+
+        return self._apply_candidate_with_rules(user_id, candidate)
+
+    def _apply_candidate_with_llm_decision(
+        self,
+        user_id: str,
+        candidate: CandidateMemory,
+        current_user_message: Message | None,
+    ) -> MemoryDecision:
+        query_text = self._candidate_search_text(candidate)
+        candidate_embedding = self.embedding_client.embed(query_text)
+        similar = self.store.similarity_search(
+            user_id,
+            candidate_embedding,
+            top_k=self.update_top_s,
+        )
+
+        try:
+            tool_call = self.decision_client.decide(
+                candidate=candidate,
+                retrieved_memories=similar,
+                current_user_message=current_user_message,
+                source_metadata=candidate.metadata,
+            )
+            decision = self._decision_from_tool_call(tool_call, candidate)
+            validation_error = self._validate_llm_decision(decision, similar)
+            if validation_error:
+                return self._fallback_decision(user_id, candidate, validation_error)
+            return self._apply_validated_decision(user_id, candidate, decision, similar)
+        except Exception as exc:
+            return self._fallback_decision(user_id, candidate, f"llm decision failed: {exc}")
+
+    def _fallback_decision(
+        self,
+        user_id: str,
+        candidate: CandidateMemory,
+        reason: str,
+    ) -> MemoryDecision:
+        if self.decision_fallback != "rules":
+            return MemoryDecision(
+                action="NOOP",
+                candidate=candidate,
+                confidence=candidate.confidence,
+                reason=f"{reason}; fallback disabled",
+            )
+        decision = self._apply_candidate_with_rules(user_id, candidate)
+        decision.reason = f"{reason}; fallback rules: {decision.reason}"
+        return decision
+
+    def _apply_candidate_with_rules(
+        self,
+        user_id: str,
+        candidate: CandidateMemory,
+    ) -> MemoryDecision:
         if candidate.is_delete_intent:
-            return self._apply_delete(user_id, candidate)
+            return self._apply_delete_with_rules(user_id, candidate)
 
         candidate_embedding = self.embedding_client.embed(candidate.content)
         similar = self.store.similarity_search(user_id, candidate_embedding, top_k=5)
@@ -51,6 +153,7 @@ class MemoryUpdater:
                 user_id=user_id,
                 content=candidate.content,
                 embedding=candidate_embedding,
+                memory_type=candidate.memory_type,
                 source_message_id=candidate.source_message_id,
                 metadata=self._metadata_for_new_memory(candidate),
             )
@@ -58,8 +161,8 @@ class MemoryUpdater:
             return MemoryDecision(
                 action="ADD",
                 candidate=candidate,
-                target_memory_id=memory.memory_id,
                 final_content=memory.content,
+                confidence=candidate.confidence,
                 reason="no similar active memory above update threshold",
             )
 
@@ -72,6 +175,7 @@ class MemoryUpdater:
                 candidate=candidate,
                 target_memory_id=top_memory.memory_id,
                 final_content=top_memory.content,
+                confidence=candidate.confidence,
                 reason="candidate duplicates an existing memory",
             )
 
@@ -89,11 +193,12 @@ class MemoryUpdater:
             candidate=candidate,
             target_memory_id=top_memory.memory_id,
             final_content=final_content,
+            confidence=candidate.confidence,
             reason=f"similar memory found with score {top_score:.3f}",
         )
 
-    def _apply_delete(self, user_id: str, candidate: CandidateMemory) -> MemoryDecision:
-        delete_query = str(candidate.metadata.get("delete_query") or candidate.content)
+    def _apply_delete_with_rules(self, user_id: str, candidate: CandidateMemory) -> MemoryDecision:
+        delete_query = self._candidate_search_text(candidate)
         query_embedding = self.embedding_client.embed(delete_query)
         similar = self.store.similarity_search(user_id, query_embedding, top_k=5)
         top_memory, top_score = similar[0] if similar else (None, 0.0)
@@ -102,6 +207,7 @@ class MemoryUpdater:
             return MemoryDecision(
                 action="NOOP",
                 candidate=candidate,
+                confidence=candidate.confidence,
                 reason="no active memory matched delete intent",
             )
 
@@ -114,8 +220,158 @@ class MemoryUpdater:
             candidate=candidate,
             target_memory_id=top_memory.memory_id,
             final_content=top_memory.content,
+            confidence=candidate.confidence,
             reason=f"soft-deleted matching memory with score {top_score:.3f}",
         )
+
+    def _apply_validated_decision(
+        self,
+        user_id: str,
+        candidate: CandidateMemory,
+        decision: MemoryDecision,
+        similar: list[tuple[Memory, float]],
+    ) -> MemoryDecision:
+        if decision.action == "NOOP":
+            return decision
+
+        if decision.action == "ADD":
+            final_content = decision.final_content or candidate.content
+            metadata = self._metadata_for_new_memory(candidate)
+            metadata.update(decision.metadata_patch)
+            memory_type = self._coerce_memory_type(
+                str(metadata.get("memory_type", candidate.memory_type))
+            )
+            memory = Memory(
+                memory_id=stable_id("mem"),
+                user_id=user_id,
+                content=final_content,
+                embedding=self.embedding_client.embed(final_content),
+                memory_type=memory_type,
+                source_message_id=candidate.source_message_id,
+                metadata=metadata,
+            )
+            self.store.add_memory(memory)
+            decision.final_content = memory.content
+            decision.metadata_patch = metadata
+            return decision
+
+        if decision.action == "DELETE":
+            self.store.delete_memory(
+                decision.target_memory_id or "",
+                reason=decision.reason,
+            )
+            return decision
+
+        if decision.action == "UPDATE":
+            target = self.store.get_memory(decision.target_memory_id or "")
+            if target is None:
+                return self._fallback_decision(
+                    user_id,
+                    candidate,
+                    "validated update target disappeared before apply",
+                )
+            similarity = self._score_for_target(target.memory_id, similar)
+            metadata = self._metadata_for_update(target, candidate, similarity)
+            metadata.update(decision.metadata_patch)
+            final_content = decision.final_content or candidate.content
+            self.store.update_memory(
+                memory_id=target.memory_id,
+                content=final_content,
+                embedding=self.embedding_client.embed(final_content),
+                metadata=metadata,
+            )
+            decision.final_content = final_content
+            decision.metadata_patch = metadata
+            return decision
+
+        return self._fallback_decision(user_id, candidate, "unsupported decision action")
+
+    def _decision_from_tool_call(
+        self,
+        tool_call: Mapping[str, Any],
+        candidate: CandidateMemory,
+    ) -> MemoryDecision:
+        tool_name = str(
+            tool_call.get("name")
+            or tool_call.get("tool_name")
+            or tool_call.get("function")
+            or ""
+        )
+        action = VALID_TOOL_NAMES.get(tool_name, tool_name)
+        raw_arguments = tool_call.get("arguments", tool_call.get("args", {}))
+        arguments = self._parse_arguments(raw_arguments)
+        metadata_patch = arguments.get("metadata_patch", {})
+        if not isinstance(metadata_patch, dict):
+            metadata_patch = {}
+        if "memory_type" in arguments:
+            metadata_patch["memory_type"] = arguments["memory_type"]
+
+        target_memory_id = arguments.get("memory_id")
+        return MemoryDecision(
+            action=action,  # type: ignore[arg-type]
+            candidate=candidate,
+            target_memory_id=str(target_memory_id) if target_memory_id else None,
+            final_content=str(arguments.get("content")).strip()
+            if arguments.get("content") is not None
+            else None,
+            confidence=float(arguments.get("confidence", 0.0)),
+            reason=str(arguments.get("reason", "")).strip(),
+            metadata_patch=metadata_patch,
+        )
+
+    @staticmethod
+    def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
+        if isinstance(raw_arguments, str):
+            parsed = json.loads(raw_arguments)
+            return parsed if isinstance(parsed, dict) else {}
+        if isinstance(raw_arguments, Mapping):
+            return dict(raw_arguments)
+        return {}
+
+    def _validate_llm_decision(
+        self,
+        decision: MemoryDecision,
+        similar: list[tuple[Memory, float]],
+    ) -> str | None:
+        if decision.action not in {"ADD", "UPDATE", "DELETE", "NOOP"}:
+            return f"invalid action {decision.action}"
+
+        if decision.confidence < self.decision_min_confidence:
+            return "decision confidence below threshold"
+
+        target_ids = {memory.memory_id for memory, _score in similar}
+        if decision.action in {"UPDATE", "DELETE"}:
+            if not decision.target_memory_id:
+                return f"{decision.action} missing memory_id"
+            if decision.target_memory_id not in target_ids:
+                return f"{decision.action} target not in retrieved memories"
+
+        if decision.action in {"ADD", "UPDATE"} and not decision.final_content:
+            return f"{decision.action} missing final content"
+
+        if decision.action in {"ADD", "NOOP"} and decision.target_memory_id:
+            return f"{decision.action} should not specify target_memory_id"
+
+        return None
+
+    @staticmethod
+    def _candidate_search_text(candidate: CandidateMemory) -> str:
+        if candidate.is_delete_intent:
+            return str(candidate.metadata.get("delete_query") or candidate.content)
+        return candidate.content
+
+    @staticmethod
+    def _score_for_target(memory_id: str, similar: list[tuple[Memory, float]]) -> float:
+        for memory, score in similar:
+            if memory.memory_id == memory_id:
+                return score
+        return 0.0
+
+    @staticmethod
+    def _coerce_memory_type(value: str) -> MemoryType:
+        if value in VALID_MEMORY_TYPES:
+            return value  # type: ignore[return-value]
+        return "other"
 
     @staticmethod
     def _metadata_for_new_memory(candidate: CandidateMemory) -> dict[str, Any]:

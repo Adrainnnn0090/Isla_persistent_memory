@@ -48,6 +48,7 @@ class Memory:
     user_id: str
     content: str
     embedding: list[float]
+    memory_type: MemoryType = "other"
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     source_message_id: str | None = None
@@ -63,6 +64,7 @@ class Memory:
             "memory_id": self.memory_id,
             "user_id": self.user_id,
             "content": self.content,
+            "memory_type": self.memory_type,
             "embedding": self.embedding,
             "created_at": datetime_to_iso(self.created_at),
             "updated_at": datetime_to_iso(self.updated_at),
@@ -77,6 +79,7 @@ class Memory:
             memory_id=data["memory_id"],
             user_id=data["user_id"],
             content=data["content"],
+            memory_type=data.get("memory_type", "other"),
             embedding=list(data["embedding"]),
             created_at=parse_datetime(data.get("created_at")) or utc_now(),
             updated_at=parse_datetime(data.get("updated_at")) or utc_now(),
@@ -92,4 +95,6 @@ class MemoryDecision:
     candidate: CandidateMemory
     target_memory_id: str | None = None
     final_content: str | None = None
+    confidence: float = 0.0
     reason: str = ""
+    metadata_patch: dict[str, Any] = field(default_factory=dict)

@@ -469,170 +469,222 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 
 ## 8. Milestones
 
-### Milestone 1：项目骨架与基础配置
+进度标注规则：
+
+- milestone 标题后的 `[ ]` 表示未完成，`[x]` 表示已完成。
+- 只有该 milestone 的目标、交付物、验收标准全部完成，并且对应测试或验证命令通过后，才允许把标题改成 `[x]`。
+- 完成后在该 milestone 的“完成记录”中写入完成日期、验证命令和关键结论。
+- 如果正在开发但未完成，保持标题 `[ ]`，只在“当前状态”写 `In Progress`。
+
+执行看板：
+
+| Milestone | 状态 | 当前状态 | 完成记录 |
+| --- | --- | --- | --- |
+| Milestone 1：项目骨架与基础配置 | [x] | Completed | 2026-05-06；`python -c "import isla_memory; from isla_memory import MemoryAgent, MemoryConfig, Memory; print('import ok')"`；`python -m pytest --collect-only -q` |
+| Milestone 2：Memory Store 持久化 | [x] | Completed | 2026-05-06；`python -m pytest tests/test_memory_store.py -q`；`MEMORY_DB_PATH=/private/tmp/isla_milestone2.sqlite3 python scripts/reset_memory_db.py` |
+| Milestone 3：Embedding 与相似度检索 | [x] | Completed | 2026-05-06；`python -m pytest tests/test_embedding_client.py -q` |
+| Milestone 4：Memory Extraction | [x] | Completed | 2026-05-06；`python -m pytest tests/test_memory_extractor.py -q` |
+| Milestone 5：Memory Update / Dedup | [x] | Completed | 2026-05-06；`python -m pytest tests/test_memory_updater.py -q` |
+| Milestone 6：Query-time Retrieval | [x] | Completed | 2026-05-06；`python -m pytest tests/test_memory_retriever.py -q` |
+| Milestone 7：Agent Prompt Augmentation | [x] | Completed | 2026-05-06；`python -m pytest tests/test_agent_e2e.py -q` |
+| Milestone 8：CLI Demo 与文档 | [x] | Completed | 2026-05-06；`python scripts/demo_chat.py`；`python -m pytest -q` |
+
+### Milestone 1：项目骨架与基础配置 [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -c "import isla_memory; from isla_memory import MemoryAgent, MemoryConfig, Memory; print('import ok')"`；`python -m pytest --collect-only -q`。结论：基础 import 成功，pytest collection 正常启动并收集 11 个测试。
 
 目标：
 
-- 建立项目目录结构。
-- 配置依赖、环境变量和基础运行命令。
+- [x] 建立项目目录结构。
+- [x] 配置依赖、环境变量和基础运行命令。
 
 交付物：
 
-- `pyproject.toml`
-- `.env.example`
-- `isla_memory/config.py`
-- `isla_memory/models.py`
-- `README.md`
+- [x] `pyproject.toml`
+- [x] `.env.example`
+- [x] `isla_memory/config.py`
+- [x] `isla_memory/models.py`
+- [x] `README.md`
 
 验收标准：
 
-- 能运行 `python -m isla_memory` 或基础 import。
-- `pytest` 能启动，即使只有空测试。
-- `.env.example` 明确需要的 API Key 和模型配置。
-- `Memory` 模型包含 `memory_type` 和 `invalid_at`，并定义 active / soft-deleted 语义。
+- [x] 能运行 `python -m isla_memory` 或基础 import。
+- [x] `pytest` 能启动，即使只有空测试。
+- [x] `.env.example` 明确需要的 API Key 和模型配置。
+- [x] `Memory` 模型包含 `memory_type` 和 `invalid_at`，并定义 active / soft-deleted 语义。
 
-### Milestone 2：Memory Store 持久化
+### Milestone 2：Memory Store 持久化 [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_memory_store.py -q`；`MEMORY_DB_PATH=/private/tmp/isla_milestone2.sqlite3 python scripts/reset_memory_db.py`。结论：MemoryStore CRUD、soft delete、默认过滤 invalid memory、legacy schema migration 和 reset 脚本均通过。
 
 目标：
 
-- 实现 SQLite memory 存储。
-- 支持 CRUD 和 user_id 隔离。
+- [x] 实现 SQLite memory 存储。
+- [x] 支持 CRUD 和 user_id 隔离。
 
 交付物：
 
-- `isla_memory/memory_store.py`
-- `scripts/reset_memory_db.py`
-- `tests/test_memory_store.py`
+- [x] `isla_memory/memory_store.py`
+- [x] `scripts/reset_memory_db.py`
+- [x] `tests/test_memory_store.py`
 
 验收标准：
 
-- 能新增 memory。
-- 能按 memory_id 查询。
-- 能按 user_id 列出 memories。
-- 能更新 content、embedding、metadata、updated_at。
-- 能 soft delete memory，并默认从 active list 和 similarity search 中过滤 invalid memories。
-- SQLite schema 与 `Memory` 模型一致，包含 `memory_type` 和 `invalid_at`。
+- [x] 能新增 memory。
+- [x] 能按 memory_id 查询。
+- [x] 能按 user_id 列出 memories。
+- [x] 能更新 content、embedding、metadata、updated_at。
+- [x] 能 soft delete memory，并默认从 active list 和 similarity search 中过滤 invalid memories。
+- [x] SQLite schema 与 `Memory` 模型一致，包含 `memory_type` 和 `invalid_at`。
 
-### Milestone 3：Embedding 与相似度检索
+### Milestone 3：Embedding 与相似度检索 [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_embedding_client.py -q`。结论：hash embedding 可确定复现，自相似接近 1，相关文本相似度高于无关文本，store similarity search 能按分数排序并隔离 user_id。
 
 目标：
 
-- 实现 embedding client。
-- 在 store 层支持 cosine similarity top-k search。
+- [x] 实现 embedding client。
+- [x] 在 store 层支持 cosine similarity top-k search。
 
 交付物：
 
-- `isla_memory/embedding_client.py`
-- `isla_memory/utils.py`
-- store similarity search 测试
+- [x] `isla_memory/embedding_client.py`
+- [x] `isla_memory/utils.py`
+- [x] store similarity search 测试（`tests/test_embedding_client.py`）
 
 验收标准：
 
-- 相同文本相似度接近 1。
-- 明显相关文本能排在无关文本之前。
-- 检索结果只返回当前 user_id 的 memories。
+- [x] 相同文本相似度接近 1。
+- [x] 明显相关文本能排在无关文本之前。
+- [x] 检索结果只返回当前 user_id 的 memories。
 
-### Milestone 4：Memory Extraction
+### Milestone 4：Memory Extraction [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_memory_extractor.py -q`。结论：明确偏好抽取、一次性问题过滤、DELETE intent、OpenAI prompt 约束和 LLM 失败 fallback 均通过。
 
 目标：
 
-- 实现从对话中抽取候选 memory。
-- 输出严格结构化数据。
+- [x] 实现从对话中抽取候选 memory。
+- [x] 输出严格结构化数据。
 
 交付物：
 
-- `isla_memory/memory_extractor.py`
-- `isla_memory/prompts.py`
-- `tests/test_memory_extractor.py`
+- [x] `isla_memory/memory_extractor.py`
+- [x] `isla_memory/prompts.py`
+- [x] `tests/test_memory_extractor.py`
 
 验收标准：
 
-- 对明确偏好能抽取 candidate memory。
-- 对一次性问题不抽取 memory。
-- 输出字段包含 content、memory_type、confidence、source_message_id、metadata。
-- LLM 输出解析失败时有 fallback，不导致主流程崩溃。
+- [x] 对明确偏好能抽取 candidate memory。
+- [x] 对一次性问题不抽取 memory。
+- [x] 输出字段包含 content、memory_type、confidence、source_message_id、metadata。
+- [x] LLM 输出解析失败时有 fallback，不导致主流程崩溃。
 
-### Milestone 5：Memory Update / Dedup
+### Milestone 5：Memory Update / Dedup [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_memory_updater.py -q`。结论：规则 fallback 和 mock LLM tool-call updater 均通过；ADD、NOOP、UPDATE、DELETE、低置信度 NOOP、非法 target fallback 和 `memory_type` 透传均有测试覆盖。
 
 目标：
 
-- 实现候选 memory 的去重和更新逻辑。
-- 支持 `ADD`、`UPDATE`、`DELETE`、`NOOP`。
+- [x] 实现候选 memory 的去重和更新逻辑。
+- [x] 支持 `ADD`、`UPDATE`、`DELETE`、`NOOP`。
 
 交付物：
 
-- `isla_memory/memory_updater.py`
-- `tests/test_memory_updater.py`
+- [x] `isla_memory/memory_updater.py`
+- [x] `tests/test_memory_updater.py`
 
 验收标准：
 
-- 新事实会 `ADD`。
-- 重复事实会 `NOOP`。
-- 更具体的新偏好会 `UPDATE`。
-- 用户明确取消某个偏好时能 `DELETE`。
-- 低置信度 candidate 不写入 store。
-- LLM tool-call 决策结果会被校验；非法 action、缺失 `memory_id`、target 不在 top-s 中时会 fallback。
-- `memory_type` 从 candidate 透传到新增或更新后的 memory。
+- [x] 新事实会 `ADD`。
+- [x] 重复事实会 `NOOP`。
+- [x] 更具体的新偏好会 `UPDATE`。
+- [x] 用户明确取消某个偏好时能 `DELETE`。
+- [x] 低置信度 candidate 不写入 store。
+- [x] LLM tool-call 决策结果会被校验；非法 action、缺失 `memory_id`、target 不在 top-s 中时会 fallback。
+- [x] `memory_type` 从 candidate 透传到新增或更新后的 memory。
 
-### Milestone 6：Query-time Retrieval
+### Milestone 6：Query-time Retrieval [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_memory_retriever.py -q`。结论：相关 query 检索、无关 query 过滤、`top_k`、`min_score`、user 隔离、invalid memory 过滤和 recency decay 排序均通过。
 
 目标：
 
-- 实现 query 时 memory 检索。
-- 支持 top-k 和 threshold filter。
+- [x] 实现 query 时 memory 检索。
+- [x] 支持 top-k 和 threshold filter。
 
 交付物：
 
-- `isla_memory/memory_retriever.py`
-- `tests/test_memory_retriever.py`
+- [x] `isla_memory/memory_retriever.py`
+- [x] `tests/test_memory_retriever.py`
 
 验收标准：
 
-- 对相关 query 返回相关 memories。
-- 对不相关 query 返回空列表或低数量结果。
-- 能调整 `top_k` 和 `min_score`。
-- 返回结果按相似度排序。
-- 默认不返回 soft-deleted / invalid memories。
-- 支持 recency decay 排序：`final_score = similarity * MEMORY_SIM_WEIGHT + recency_score * MEMORY_RECENCY_WEIGHT`。
+- [x] 对相关 query 返回相关 memories。
+- [x] 对不相关 query 返回空列表或低数量结果。
+- [x] 能调整 `top_k` 和 `min_score`。
+- [x] 返回结果按相似度排序。
+- [x] 默认不返回 soft-deleted / invalid memories。
+- [x] 支持 recency decay 排序：`final_score = similarity * MEMORY_SIM_WEIGHT + recency_score * MEMORY_RECENCY_WEIGHT`。
 
-### Milestone 7：Agent Prompt Augmentation
+### Milestone 7：Agent Prompt Augmentation [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_agent_e2e.py -q`。结论：agent 能完成 retrieval、prompt augmentation、response、memory extraction/update 闭环；prompt builder 会按 `MEMORY_MAX_CONTEXT_TOKENS` 截断 memories。
 
 目标：
 
-- 将 retrieval 和 LLM response 串起来。
-- 当前轮对话结束后自动更新 memory。
+- [x] 将 retrieval 和 LLM response 串起来。
+- [x] 当前轮对话结束后自动更新 memory。
 
 交付物：
 
-- `isla_memory/agent.py`
-- `tests/test_agent_e2e.py`
+- [x] `isla_memory/agent.py`
+- [x] `tests/test_agent_e2e.py`
 
 验收标准：
 
-- agent 接收 query 后能检索 memory。
-- prompt 中包含 relevant memories。
-- assistant response 能使用相关 memory。
-- response 生成后会抽取并更新新 memory。
-- prompt augmentation 遵守 `MEMORY_MAX_CONTEXT_TOKENS`，按检索排序注入 memories，超过预算即截断。
+- [x] agent 接收 query 后能检索 memory。
+- [x] prompt 中包含 relevant memories。
+- [x] assistant response 能使用相关 memory。
+- [x] response 生成后会抽取并更新新 memory。
+- [x] prompt augmentation 遵守 `MEMORY_MAX_CONTEXT_TOKENS`，按检索排序注入 memories，超过预算即截断。
 
-### Milestone 8：CLI Demo 与文档
+### Milestone 8：CLI Demo 与文档 [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python scripts/demo_chat.py`；`python -m pytest -q`。结论：CLI demo 能展示 memory 写入、query-time retrieval 和 prompt augmentation；全量 26 个测试通过。
 
 目标：
 
-- 提供一个用户可以直接运行的 demo。
-- 文档说明如何安装、配置、运行和验证。
+- [x] 提供一个用户可以直接运行的 demo。
+- [x] 文档说明如何安装、配置、运行和验证。
 
 交付物：
 
-- `scripts/demo_chat.py`
-- `README.md`
-- 完整测试用例
+- [x] `scripts/demo_chat.py`
+- [x] `README.md`
+- [x] 完整测试用例
 
 验收标准：
 
-- 新机器按 README 执行命令即可跑通。
-- demo 能展示 memory 写入、检索和 prompt augmentation。
-- `pytest` 通过。
+- [x] 新机器按 README 执行命令即可跑通。
+- [x] demo 能展示 memory 写入、检索和 prompt augmentation。
+- [x] `pytest` 通过。
 
 ## 9. 实现优先级
 

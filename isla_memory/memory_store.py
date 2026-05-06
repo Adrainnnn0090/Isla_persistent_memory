@@ -25,6 +25,7 @@ class MemoryStore:
                     memory_id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    memory_type TEXT NOT NULL DEFAULT 'other',
                     embedding_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -35,7 +36,10 @@ class MemoryStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)")
-            self._migrate_invalid_at(conn)
+            self._migrate_schema(conn)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_valid ON memories(user_id, invalid_at)"
+            )
 
     def add_memory(self, memory: Memory) -> Memory:
         with self._connect() as conn:
@@ -45,6 +49,7 @@ class MemoryStore:
                     memory_id,
                     user_id,
                     content,
+                    memory_type,
                     embedding_json,
                     created_at,
                     updated_at,
@@ -52,7 +57,7 @@ class MemoryStore:
                     metadata_json,
                     invalid_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(memory),
             )
@@ -79,6 +84,7 @@ class MemoryStore:
                 """
                 UPDATE memories
                 SET content = ?,
+                    memory_type = ?,
                     embedding_json = ?,
                     metadata_json = ?,
                     updated_at = ?,
@@ -87,6 +93,7 @@ class MemoryStore:
                 """,
                 (
                     content,
+                    str(merged_metadata.get("memory_type", existing.memory_type)),
                     json.dumps(embedding),
                     json.dumps(merged_metadata, ensure_ascii=False),
                     datetime_to_iso(updated_at),
@@ -172,13 +179,17 @@ class MemoryStore:
         return conn
 
     @staticmethod
-    def _migrate_invalid_at(conn: sqlite3.Connection) -> None:
+    def _migrate_schema(conn: sqlite3.Connection) -> None:
         columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(memories)").fetchall()
         }
         if "invalid_at" not in columns:
             conn.execute("ALTER TABLE memories ADD COLUMN invalid_at TEXT")
+        if "memory_type" not in columns:
+            conn.execute(
+                "ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'other'"
+            )
 
     @staticmethod
     def _to_row(memory: Memory) -> tuple[Any, ...]:
@@ -186,6 +197,7 @@ class MemoryStore:
             memory.memory_id,
             memory.user_id,
             memory.content,
+            memory.memory_type,
             json.dumps(memory.embedding),
             datetime_to_iso(memory.created_at),
             datetime_to_iso(memory.updated_at),
@@ -200,6 +212,7 @@ class MemoryStore:
             memory_id=row["memory_id"],
             user_id=row["user_id"],
             content=row["content"],
+            memory_type=row["memory_type"],
             embedding=json.loads(row["embedding_json"]),
             created_at=parse_datetime(row["created_at"]) or utc_now(),
             updated_at=parse_datetime(row["updated_at"]) or utc_now(),

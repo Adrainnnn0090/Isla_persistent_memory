@@ -18,11 +18,13 @@ Conversation Input
 ## 当前能力
 
 - 从用户对话中抽取长期有用的 candidate memories。
-- 使用 SQLite 持久化 memory、metadata、embedding 和软删除状态。
+- 使用 SQLite 持久化 `memory_type`、metadata、embedding 和软删除状态。
 - 支持 `ADD`、`UPDATE`、`DELETE`、`NOOP` 记忆更新动作。
+- 支持 mem0 风格的 mockable LLM tool-call updater：LLM/测试桩只返回 `add_memory`、`update_memory`、`delete_memory`、`noop` 意图，数据库写入由系统校验后执行。
+- 保留规则版 updater 作为默认离线策略和 LLM 决策失败 fallback。
 - `DELETE` 采用 soft delete：标记 `invalid_at`，不物理删除，方便后续 temporal reasoning。
-- query-time 使用 embedding 检索 relevant memories。
-- 将 retrieved memories 注入 prompt 的 `Relevant user memories` 区域。
+- query-time 使用 embedding 检索 relevant memories，并支持 recency-aware scoring。
+- 将 retrieved memories 注入 prompt 的 `Relevant user memories` 区域，并受 `MEMORY_MAX_CONTEXT_TOKENS` 预算约束。
 - 支持离线规则 demo，也支持 OpenAI API demo。
 - 提供 LongMemEval hypothesis 生成脚本，用于科研评测链路。
 
@@ -157,6 +159,15 @@ print(agent.last_prompt)
 MEMORY_DB_PATH=./data/memory.sqlite3
 MEMORY_TOP_K=5
 MEMORY_MIN_SCORE=0.35
+MEMORY_MAX_CONTEXT_TOKENS=800
+MEMORY_RECENCY_HALF_LIFE_DAYS=30
+MEMORY_RECENCY_WEIGHT=0.3
+MEMORY_SIM_WEIGHT=0.7
+MEMORY_UPDATE_STRATEGY=rules
+MEMORY_UPDATE_TOP_S=5
+MEMORY_DECISION_MODEL=gpt-4.1-mini
+MEMORY_DECISION_MIN_CONFIDENCE=0.65
+MEMORY_DECISION_FALLBACK=rules
 MEMORY_DEDUP_SCORE=0.90
 MEMORY_UPDATE_SCORE=0.62
 MEMORY_MIN_CONFIDENCE=0.65
@@ -240,13 +251,9 @@ extract -> decide -> persist -> retrieve -> augment -> respond
 
 下一阶段重点：
 
-- mem0 风格 LLM tool-call memory updater。
-- `memory_type` 与 `invalid_at` 进入一等数据模型。
-- prompt memory token budget。
-- recency-aware retrieval。
-- negation / delete intent 前置识别。
-- mock LLM 测试，保证科研实验可复现。
-- 后续再引入 hybrid retrieval、reranker、compaction、importance score 和更严肃的 benchmark。
+- 接入真实 OpenAI / 其他 provider 的 updater decision client，而不只使用 mock tool-call 测试桩。
+- 在 LongMemEval 上系统比较 `rules`、`llm_tool_call`、不同 embedding provider 和不同 `top_k` 的效果。
+- 后续再引入 hybrid retrieval、reranker、compaction、importance score、contradiction detector 和更严肃的 benchmark。
 
 完整 milestone 和实现计划见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。
 

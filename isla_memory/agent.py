@@ -35,11 +35,18 @@ class MemoryAgent:
             min_confidence=self.config.min_confidence,
             dedup_score=self.config.dedup_score,
             update_score=self.config.update_score,
+            update_strategy=self.config.update_strategy,
+            update_top_s=self.config.update_top_s,
+            decision_min_confidence=self.config.decision_min_confidence,
+            decision_fallback=self.config.decision_fallback,
         )
         self.retriever = MemoryRetriever(
             store=self.store,
             embedding_client=self.embedding_client,
             min_score=self.config.min_score,
+            recency_half_life_days=self.config.recency_half_life_days,
+            recency_weight=self.config.recency_weight,
+            sim_weight=self.config.sim_weight,
         )
         self.llm_client = llm_client or self._build_llm_client(self.config)
         self.recent_messages = list(recent_messages or [])
@@ -62,7 +69,11 @@ class MemoryAgent:
             top_k=self.config.top_k,
         )
         self.last_retrieved_memories = relevant_memories
-        self.last_prompt = build_augmented_prompt(user_message, relevant_memories)
+        self.last_prompt = build_augmented_prompt(
+            user_message,
+            relevant_memories,
+            max_memory_tokens=self.config.max_context_tokens,
+        )
 
         response = self.llm_client.generate(
             prompt=self.last_prompt,
@@ -83,7 +94,11 @@ class MemoryAgent:
             current_user_message=current_user_message,
             current_assistant_message=current_assistant_message,
         )
-        self.last_decisions = self.updater.update_memories(self.user_id, candidates)
+        self.last_decisions = self.updater.update_memories(
+            self.user_id,
+            candidates,
+            current_user_message=current_user_message,
+        )
 
         self.recent_messages.extend([current_user_message, current_assistant_message])
         self.recent_messages = self.recent_messages[-20:]
