@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from isla_memory.config import MemoryConfig
-from isla_memory.embedding_client import EmbeddingClient, HashEmbeddingClient, OpenAIEmbeddingClient
+from isla_memory.embedding_client import (
+    BGEEmbeddingClient,
+    EmbeddingClient,
+    HashEmbeddingClient,
+    OpenAIEmbeddingClient,
+)
 from isla_memory.llm_client import LLMClient, OpenAILLMClient, RuleBasedLLMClient
 from isla_memory.memory_extractor import OpenAIMemoryExtractor, RuleBasedMemoryExtractor
 from isla_memory.memory_retriever import MemoryRetriever
@@ -114,6 +119,14 @@ class MemoryAgent:
                 model=config.embedding_model,
                 api_key=config.openai_api_key,
             )
+        if config.embedding_provider == "bge_m3":
+            return BGEEmbeddingClient(
+                model=config.bge_model,
+                device=config.bge_device,
+                batch_size=config.bge_batch_size,
+                max_length=config.bge_max_length,
+                use_fp16=config.bge_use_fp16,
+            )
         if config.embedding_provider != "hash":
             raise ValueError(f"Unsupported embedding provider: {config.embedding_provider}")
         return HashEmbeddingClient(dimension=config.hash_embedding_dimension)
@@ -135,6 +148,7 @@ class MemoryAgent:
             return OpenAIMemoryExtractor(
                 model=config.extractor_model,
                 api_key=config.openai_api_key,
+                include_assistant_facts=False,
             )
         if config.extractor_provider != "rules":
             raise ValueError(f"Unsupported extractor provider: {config.extractor_provider}")

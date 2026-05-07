@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from isla_memory.embedding_client import EmbeddingClient
 from isla_memory.memory_store import MemoryStore
 from isla_memory.models import CandidateMemory, Memory, MemoryDecision, Message, MemoryType
-from isla_memory.utils import contains_any, normalize_text, stable_id, utc_now
+from isla_memory.utils import contains_any, normalize_text, parse_datetime, stable_id, utc_now
 
 VALID_MEMORY_TYPES: set[str] = {"preference", "fact", "goal", "constraint", "profile", "other"}
 VALID_TOOL_NAMES: dict[str, str] = {
@@ -148,12 +149,15 @@ class MemoryUpdater:
         top_memory, top_score = similar[0] if similar else (None, 0.0)
 
         if top_memory is None or top_score < self.update_score:
+            source_time = self._source_datetime(candidate)
             memory = Memory(
                 memory_id=stable_id("mem"),
                 user_id=user_id,
                 content=candidate.content,
                 embedding=candidate_embedding,
                 memory_type=candidate.memory_type,
+                created_at=source_time or utc_now(),
+                updated_at=source_time or utc_now(),
                 source_message_id=candidate.source_message_id,
                 metadata=self._metadata_for_new_memory(candidate),
             )
@@ -241,12 +245,15 @@ class MemoryUpdater:
             memory_type = self._coerce_memory_type(
                 str(metadata.get("memory_type", candidate.memory_type))
             )
+            source_time = self._source_datetime(candidate)
             memory = Memory(
                 memory_id=stable_id("mem"),
                 user_id=user_id,
                 content=final_content,
                 embedding=self.embedding_client.embed(final_content),
                 memory_type=memory_type,
+                created_at=source_time or utc_now(),
+                updated_at=source_time or utc_now(),
                 source_message_id=candidate.source_message_id,
                 metadata=metadata,
             )
@@ -372,6 +379,23 @@ class MemoryUpdater:
         if value in VALID_MEMORY_TYPES:
             return value  # type: ignore[return-value]
         return "other"
+
+    @staticmethod
+    def _source_datetime(candidate: CandidateMemory) -> datetime | None:
+        raw_value = candidate.metadata.get("source_date")
+        if not raw_value:
+            return None
+        value = str(raw_value)
+        try:
+            return parse_datetime(value)
+        except ValueError:
+            pass
+        for date_format in ("%Y/%m/%d (%a) %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(value, date_format).replace(tzinfo=UTC)
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
     def _metadata_for_new_memory(candidate: CandidateMemory) -> dict[str, Any]:

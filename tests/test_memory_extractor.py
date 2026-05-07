@@ -85,6 +85,31 @@ class MemoryExtractorTest(unittest.TestCase):
         self.assertNotIn("assistant 生成的建议", prompt)
         self.assertIn("DELETE intent", prompt)
 
+    def test_openai_prompt_can_include_assistant_facts_for_benchmark(self) -> None:
+        user_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="user",
+            content="Can you summarize the result?",
+        )
+        assistant_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="assistant",
+            content="The user's project deadline is Friday.",
+        )
+
+        prompt = OpenAIMemoryExtractor._build_prompt(
+            [],
+            user_message,
+            assistant_message,
+            include_assistant_facts=True,
+        )
+
+        self.assertIn("current_assistant_message", prompt)
+        self.assertIn("project deadline is Friday", prompt)
+        self.assertIn("Assistant facts are allowed", prompt)
+
     def test_openai_extractor_falls_back_when_llm_fails(self) -> None:
         class _FailingResponses:
             def create(self, **_kwargs: object) -> object:
@@ -97,6 +122,7 @@ class MemoryExtractorTest(unittest.TestCase):
         extractor.model = "test-model"
         extractor.client = _FailingClient()
         extractor.fallback_extractor = RuleBasedMemoryExtractor()
+        extractor.include_assistant_facts = False
         message = Message(
             message_id=stable_id("msg"),
             user_id="u1",
@@ -108,6 +134,43 @@ class MemoryExtractorTest(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].memory_type, "preference")
+
+    def test_openai_extractor_does_not_skip_questions_when_assistant_facts_enabled(self) -> None:
+        class _Response:
+            output_text = (
+                '{"memories":[{"content":"The deadline is Friday.",'
+                '"memory_type":"fact","confidence":0.9,"metadata":{}}]}'
+            )
+
+        class _Responses:
+            def create(self, **_kwargs: object) -> object:
+                return _Response()
+
+        class _Client:
+            responses = _Responses()
+
+        extractor = OpenAIMemoryExtractor.__new__(OpenAIMemoryExtractor)
+        extractor.model = "test-model"
+        extractor.client = _Client()
+        extractor.fallback_extractor = RuleBasedMemoryExtractor()
+        extractor.include_assistant_facts = True
+        user_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="user",
+            content="When is the deadline?",
+        )
+        assistant_message = Message(
+            message_id=stable_id("msg"),
+            user_id="u1",
+            role="assistant",
+            content="The deadline is Friday.",
+        )
+
+        candidates = extractor.extract_memories("u1", [], user_message, assistant_message)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].content, "The deadline is Friday.")
 
 
 if __name__ == "__main__":

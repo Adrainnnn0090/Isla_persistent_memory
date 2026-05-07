@@ -488,6 +488,9 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 | Milestone 6：Query-time Retrieval | [x] | Completed | 2026-05-06；`python -m pytest tests/test_memory_retriever.py -q` |
 | Milestone 7：Agent Prompt Augmentation | [x] | Completed | 2026-05-06；`python -m pytest tests/test_agent_e2e.py -q` |
 | Milestone 8：CLI Demo 与文档 | [x] | Completed | 2026-05-06；`python scripts/demo_chat.py`；`python -m pytest -q` |
+| Milestone 9：LongMemEval Memory Ingestion Evaluation | [x] | Completed | 2026-05-06；`python -m pytest tests/test_longmemeval_memory.py -q`；补充 `--extract-concurrency` add-only 并发抽取 |
+| Milestone 10：Local BGE-M3 Embedding Provider | [x] | Completed | 2026-05-06；`python -m pytest tests/test_embedding_client.py -q` |
+| Milestone 11：Question-level Concurrent LongMemEval Ingestion | [x] | Completed | 2026-05-06；`python -m pytest tests/test_longmemeval_memory.py -q`；`python -m pytest -q` |
 
 ### Milestone 1：项目骨架与基础配置 [x]
 
@@ -686,6 +689,95 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 - [x] demo 能展示 memory 写入、检索和 prompt augmentation。
 - [x] `pytest` 通过。
 
+### Milestone 9：LongMemEval Memory Ingestion Evaluation [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_longmemeval_memory.py -q`。结论：新增 memory-system evaluation 脚本，能 replay LongMemEval 对话并通过 extractor/updater 写入 Isla memories；默认每 8 个 user/assistant pairs 做一次 chunk extraction；输出 JSONL 兼容官方 evaluator，`--resume` 能跳过已完成 question_id；`add-only` ingestion 支持 `--extract-concurrency` 并发抽取、顺序写入，适合降低 OpenAI extractor 的等待时间。
+
+目标：
+
+- [x] 新增对标 Mem0 ingestion/search/evaluate 形态的 LongMemEval memory 评测脚本。
+- [x] 明确区分 oracle retrieval baseline 和真实 memory-system evaluation。
+
+交付物：
+
+- [x] `scripts/run_longmemeval_memory.py`
+- [x] `tests/test_longmemeval_memory.py`
+- [x] README / Project Plan 说明新旧脚本语义差异。
+
+验收标准：
+
+- [x] replay `haystack_sessions` 为 user/assistant pair。
+- [x] ingestion 必须经过 extractor/updater，不直接把 raw session/turn 写入 store。
+- [x] 每个 `question_id` 使用独立 `user_id`。
+- [x] 支持 `--ingest-mode updater|add-only`。
+- [x] 支持 `--extraction-granularity pair|chunk|session`，默认 `chunk`。
+- [x] 支持 `--chunk-pairs 8`，默认每 8 个 pair 调一次 extractor。
+- [x] 支持 `--extract-concurrency N`，在 `add-only` 模式下并发 extractor calls，并按原 chunk 顺序写入 memory DB。
+- [x] 支持 `--include-assistant-facts`，用于 benchmark assistant-memory 场景。
+- [x] memory metadata 写入 `benchmark`、`question_id`、`session_id`、`source_date` 和 `source_role`。
+- [x] 输出 JSONL 形态为 `{"question_id": "...", "hypothesis": "..."}`。
+
+### Milestone 10：Local BGE-M3 Embedding Provider [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python -m pytest tests/test_embedding_client.py -q`。结论：新增 `bge_m3` provider，使用 `FlagEmbedding` 的 `BGEM3FlagModel` 本地生成 dense vectors；测试使用 mock model，不下载真实模型。
+
+目标：
+
+- [x] 增加本地 BGE-M3 embedding provider，减少 OpenAI embedding 的长度限制和费用依赖。
+- [x] 保持 embedding client 抽象兼容 `embed()` / `embed_many()`。
+
+交付物：
+
+- [x] `isla_memory/embedding_client.py`
+- [x] `isla_memory/config.py`
+- [x] `.env.example`
+- [x] `pyproject.toml`
+- [x] `tests/test_embedding_client.py`
+
+验收标准：
+
+- [x] 支持 `MEMORY_EMBEDDING_PROVIDER=bge_m3`。
+- [x] 支持 `MEMORY_BGE_MODEL`、`MEMORY_BGE_DEVICE`、`MEMORY_BGE_BATCH_SIZE`、`MEMORY_BGE_MAX_LENGTH`、`MEMORY_BGE_USE_FP16`。
+- [x] `embed_many()` 使用 batch encode 并保持输出顺序。
+- [x] 未安装 `FlagEmbedding` 时给出 `pip install -e ".[local-embedding]"` 提示。
+- [x] `run_longmemeval.py` 和 `run_longmemeval_memory.py` 都能构建 BGE-M3 embedding client。
+
+### Milestone 11：Question-level Concurrent LongMemEval Ingestion [x]
+
+当前状态：Completed
+
+完成记录：2026-05-06 完成。验证命令：`python scripts/run_longmemeval_memory.py --help`；`python -m pytest tests/test_longmemeval_memory.py -q`；`python -m pytest -q`；`python -m unittest discover -s tests`。结论：`add-only + --extract-concurrency > 1` 已升级为 question-level extraction job queue；一个 question 内跨 session/chunk 的 jobs 会并发抽取，主线程仍按 job index 顺序写入 memory DB；`updater` 模式保持顺序执行。
+
+背景：
+
+当前 `--extract-concurrency` 只在单个 session 内并发。LongMemEval oracle 中很多 session 只有一个 chunk，所以即使设置 `--extract-concurrency 4/8`，实际仍接近 session-by-session 顺序执行。要真正降低 OpenAI extractor 的等待时间，需要把并发粒度提升到一个 question 内的全部 session/chunk jobs。
+
+目标：
+
+- [x] 在 `add-only` ingestion 中把一个 question 的所有 session/chunk 先切成全局 extraction job queue。
+- [x] `--extract-concurrency N` 对 question 内所有 jobs 生效，而不是只对单个 session 生效。
+- [x] 保持 `updater` ingestion 顺序执行，避免 ADD / UPDATE / DELETE / NOOP 依赖的 DB 状态被并发破坏。
+
+设计：
+
+- [x] 按 LongMemEval 原始时间顺序遍历 sessions，构建 `ExtractionJob`。
+- [x] 每个 job 保存 `session_id`、`source_date`、`batch_start_pair`、`extraction_granularity` 和 deterministic `recent_messages` snapshot。
+- [x] worker 线程只调用 extractor 并返回 `CandidateMemory`，不写 SQLite。
+- [x] 主线程按 job index 顺序执行 confidence filter、embedding 和 `MemoryStore.add_memory()`。
+- [x] 每个 question 完成 ingestion 后再 retrieval / answer / 写 JSONL。
+
+验收标准：
+
+- [x] `add-only + --extract-concurrency > 1` 时，一个 question 的跨 session chunks 可以并发抽取。
+- [x] 写入 memory DB 的 metadata 仍保留正确的 `question_id`、`session_id`、`source_date`、`batch_start_pair`。
+- [x] `recent_messages` snapshot 与顺序 replay 的上下文窗口一致。
+- [x] `updater` 模式不走全局并发队列。
+- [x] 覆盖测试证明跨 session job queue 生效，并且不会直接把 raw session/turn 写入 store。
+
 ## 9. 实现优先级
 
 建议按以下顺序实现：
@@ -711,10 +803,15 @@ Assistant: 你偏好我用中文解释技术问题，并且回答直接一点。
 
 ```text
 MEMORY_DB_PATH=./data/memory.sqlite3
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4.1-mini
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=text-embedding-3-small
+MEMORY_LLM_PROVIDER=openai
+MEMORY_LLM_MODEL=gpt-4.1-mini
+MEMORY_EMBEDDING_PROVIDER=openai|bge_m3
+MEMORY_EMBEDDING_MODEL=text-embedding-3-small
+MEMORY_BGE_MODEL=BAAI/bge-m3
+MEMORY_BGE_DEVICE=auto
+MEMORY_BGE_BATCH_SIZE=8
+MEMORY_BGE_MAX_LENGTH=8192
+MEMORY_BGE_USE_FP16=true
 MEMORY_UPDATE_STRATEGY=llm_tool_call
 MEMORY_UPDATE_TOP_S=5
 MEMORY_DECISION_MODEL=gpt-4.1-mini

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from isla_memory.config import MemoryConfig
-from isla_memory.embedding_client import HashEmbeddingClient, OpenAIEmbeddingClient
+from isla_memory.embedding_client import BGEEmbeddingClient, HashEmbeddingClient, OpenAIEmbeddingClient
 from isla_memory.llm_client import OpenAILLMClient
 from isla_memory.memory_retriever import MemoryRetriever
 from isla_memory.memory_store import MemoryStore
@@ -57,11 +57,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_embedding_client(config: MemoryConfig) -> HashEmbeddingClient | OpenAIEmbeddingClient:
+def build_embedding_client(config: MemoryConfig) -> BGEEmbeddingClient | HashEmbeddingClient | OpenAIEmbeddingClient:
     if config.embedding_provider == "openai":
         return OpenAIEmbeddingClient(
             model=config.embedding_model,
             api_key=config.openai_api_key,
+        )
+    if config.embedding_provider == "bge_m3":
+        return BGEEmbeddingClient(
+            model=config.bge_model,
+            device=config.bge_device,
+            batch_size=config.bge_batch_size,
+            max_length=config.bge_max_length,
+            use_fp16=config.bge_use_fp16,
         )
     return HashEmbeddingClient(dimension=config.hash_embedding_dimension)
 

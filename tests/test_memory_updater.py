@@ -314,6 +314,25 @@ class MemoryUpdaterTest(unittest.TestCase):
             self.assertIn("fallback rules", decision.reason)
             self.assertEqual(len(store.list_memories("u1")), 1)
 
+    def test_add_uses_candidate_source_date_for_memory_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            embedding = HashEmbeddingClient()
+            store = MemoryStore(str(Path(tmp_dir) / "memory.sqlite3"))
+            updater = MemoryUpdater(store, embedding)
+            candidate = CandidateMemory(
+                content="用户喜欢研究长期记忆系统。",
+                memory_type="preference",
+                confidence=0.95,
+                metadata={"source_date": "2023/05/20 (Sat) 02:21"},
+            )
+
+            updater.update_memories("u1", [candidate])
+            memory = store.list_memories("u1")[0]
+
+            self.assertEqual(memory.created_at.year, 2023)
+            self.assertEqual(memory.created_at.month, 5)
+            self.assertEqual(memory.created_at.day, 20)
+
 
 if __name__ == "__main__":
     unittest.main()

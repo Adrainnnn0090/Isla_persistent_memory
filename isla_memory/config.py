@@ -9,6 +9,11 @@ DEFAULT_LLM_PROVIDER = "rules"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_EMBEDDING_PROVIDER = "hash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_BGE_MODEL = "BAAI/bge-m3"
+DEFAULT_BGE_DEVICE = "auto"
+DEFAULT_BGE_BATCH_SIZE = 8
+DEFAULT_BGE_MAX_LENGTH = 8192
+DEFAULT_BGE_USE_FP16 = True
 DEFAULT_EXTRACTOR_PROVIDER = "rules"
 DEFAULT_EXTRACTOR_MODEL = "gpt-4.1-mini"
 DEFAULT_TOP_K = 5
@@ -54,6 +59,11 @@ class MemoryConfig:
     llm_model: str = DEFAULT_LLM_MODEL
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    bge_model: str = DEFAULT_BGE_MODEL
+    bge_device: str = DEFAULT_BGE_DEVICE
+    bge_batch_size: int = DEFAULT_BGE_BATCH_SIZE
+    bge_max_length: int = DEFAULT_BGE_MAX_LENGTH
+    bge_use_fp16: bool = DEFAULT_BGE_USE_FP16
     extractor_provider: str = DEFAULT_EXTRACTOR_PROVIDER
     extractor_model: str = DEFAULT_EXTRACTOR_MODEL
     top_k: int = DEFAULT_TOP_K
@@ -89,6 +99,19 @@ class MemoryConfig:
                 file_values,
                 "MEMORY_EMBEDDING_MODEL",
                 DEFAULT_EMBEDDING_MODEL,
+            ),
+            bge_model=_get_value(file_values, "MEMORY_BGE_MODEL", DEFAULT_BGE_MODEL),
+            bge_device=_get_value(file_values, "MEMORY_BGE_DEVICE", DEFAULT_BGE_DEVICE),
+            bge_batch_size=int(
+                _get_value(file_values, "MEMORY_BGE_BATCH_SIZE", str(DEFAULT_BGE_BATCH_SIZE))
+            ),
+            bge_max_length=int(
+                _get_value(file_values, "MEMORY_BGE_MAX_LENGTH", str(DEFAULT_BGE_MAX_LENGTH))
+            ),
+            bge_use_fp16=_get_bool_value(
+                file_values,
+                "MEMORY_BGE_USE_FP16",
+                DEFAULT_BGE_USE_FP16,
             ),
             extractor_provider=_get_value(
                 file_values,
@@ -158,3 +181,8 @@ class MemoryConfig:
                 )
             ),
         )
+
+
+def _get_bool_value(file_values: dict[str, str], key: str, default: bool) -> bool:
+    raw_value = _get_value(file_values, key, str(default)).lower()
+    return raw_value in {"1", "true", "yes", "y", "on"}

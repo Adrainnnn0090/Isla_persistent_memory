@@ -34,7 +34,7 @@ Conversation Input
 isla_memory/
   agent.py                # 对话主编排：retrieve -> prompt -> response -> memory update
   config.py               # .env 配置
-  embedding_client.py     # hash / OpenAI embedding client
+  embedding_client.py     # hash / OpenAI / BGE-M3 embedding client
   llm_client.py           # rules / OpenAI response client
   memory_extractor.py     # 从对话中抽取 candidate memories
   memory_retriever.py     # query-time memory retrieval
@@ -47,7 +47,8 @@ isla_memory/
 scripts/
   demo_chat.py            # 离线 MVP demo
   demo_openai_chat.py     # OpenAI API demo
-  run_longmemeval.py      # LongMemEval hypothesis generation
+  run_longmemeval.py      # LongMemEval oracle retrieval baseline
+  run_longmemeval_memory.py # LongMemEval memory-system evaluation
   reset_memory_db.py
 
 tests/
@@ -172,17 +173,34 @@ MEMORY_DEDUP_SCORE=0.90
 MEMORY_UPDATE_SCORE=0.62
 MEMORY_MIN_CONFIDENCE=0.65
 HASH_EMBEDDING_DIMENSION=256
+MEMORY_BGE_MODEL=BAAI/bge-m3
+MEMORY_BGE_DEVICE=auto
+MEMORY_BGE_BATCH_SIZE=8
+MEMORY_BGE_MAX_LENGTH=8192
+MEMORY_BGE_USE_FP16=true
 ```
 
 Provider 配置：
 
 ```text
 MEMORY_LLM_PROVIDER=rules|openai
-MEMORY_EMBEDDING_PROVIDER=hash|openai
+MEMORY_EMBEDDING_PROVIDER=hash|openai|bge_m3
 MEMORY_EXTRACTOR_PROVIDER=rules|openai
 ```
 
-当前默认 embedding 是 `HashEmbeddingClient`，用于离线 demo 和测试。真实实验建议使用更稳定的 embedding provider，并为不同 embedding 模型使用不同数据库，避免向量维度和相似度分布混用。
+当前默认 embedding 是 `HashEmbeddingClient`，用于离线 demo 和测试。正式实验建议使用 `bge_m3` 或 OpenAI embedding，并为不同 embedding 模型使用不同数据库，避免向量维度和相似度分布混用。
+
+本地 BGE-M3：
+
+```bash
+pip install -e ".[local-embedding]"
+```
+
+```text
+MEMORY_EMBEDDING_PROVIDER=bge_m3
+MEMORY_BGE_MODEL=BAAI/bge-m3
+MEMORY_BGE_DEVICE=auto
+```
 
 ## 测试
 
@@ -201,9 +219,12 @@ pytest
 
 ## LongMemEval 评测
 
-Isla 提供一个 LongMemEval hypothesis 生成脚本，用于把当前 memory retrieval + LLM answering 链路接到官方评测脚本。
+Isla 现在提供两条 LongMemEval 路径，语义不同：
 
-先生成小样本：
+- `scripts/run_longmemeval.py`：oracle retrieval baseline。它直接把 LongMemEval haystack 切成 session/turn 后写入 vector store，只能作为检索上限参考。
+- `scripts/run_longmemeval_memory.py`：memory-system evaluation。它按时间 replay user/assistant pairs，经由 Isla extractor/updater 生成 memories，再 retrieval/answer，更适合对标 Mem0。默认每 8 个 pair 合成一个 chunk 调一次 extractor，避免每个 pair 都调用一次 LLM；`add-only` 模式可用 `--extract-concurrency` 对一个 question 内的所有 session/chunk jobs 做全局并发抽取，以降低墙钟时间。
+
+Oracle retrieval baseline 小样本：
 
 ```bash
 python scripts/run_longmemeval.py \
@@ -212,6 +233,45 @@ python scripts/run_longmemeval.py \
   --limit 10 \
   --top-k 10 \
   --granularity turn
+```
+
+Memory-system evaluation 小样本：
+
+```bash
+python scripts/run_longmemeval_memory.py \
+  --data ../LongMemEval/data/longmemeval_oracle.json \
+  --output data/longmemeval_outputs/isla_memory_1.jsonl \
+  --limit 1 \
+  --top-k 20 \
+  --extraction-granularity chunk \
+  --chunk-pairs 8
+```
+
+BGE/OpenAI 都可用的 add-only 并发抽取版本：
+
+```bash
+python scripts/run_longmemeval_memory.py \
+  --data ../LongMemEval/data/longmemeval_oracle.json \
+  --output data/longmemeval_outputs/isla_memory_chunk8_async4.jsonl \
+  --db-path data/longmemeval_outputs/isla_memory_chunk8_async4.sqlite3 \
+  --top-k 20 \
+  --ingest-mode add-only \
+  --extraction-granularity chunk \
+  --chunk-pairs 8 \
+  --extract-concurrency 4
+```
+
+BGE-M3 本地 embedding：
+
+```bash
+MEMORY_EMBEDDING_PROVIDER=bge_m3 \
+python scripts/run_longmemeval_memory.py \
+  --data ../LongMemEval/data/longmemeval_oracle.json \
+  --output data/longmemeval_outputs/isla_memory_bge_1.jsonl \
+  --limit 1 \
+  --top-k 20 \
+  --extraction-granularity chunk \
+  --chunk-pairs 8
 ```
 
 输出格式：
@@ -231,13 +291,16 @@ oracle full        # 500 条完整评测
 如果中途断掉，可以使用：
 
 ```bash
-python scripts/run_longmemeval.py ... --resume
+python scripts/run_longmemeval_memory.py ... --resume
 ```
 
 注意：
 
 - `session` 粒度可能触发 embedding 单条输入长度限制。
 - `turn` 粒度更适合当前 MVP 跑完整 benchmark。
+- memory-system evaluation 默认只 embed 抽取后的短 memories，因此比 oracle session embedding 更不容易触发 OpenAI embedding 长度限制。
+- memory-system evaluation 默认 `--extraction-granularity chunk --chunk-pairs 8`；如果要复现每个 user/assistant pair 一次 extractor 调用，可显式使用 `--extraction-granularity pair`。
+- `--extract-concurrency N` 只作用于 `--ingest-mode add-only`：并发发起一个 question 内所有 session/chunk 的 extractor 请求，主线程仍按原 job 顺序写入 memory DB。`updater` 模式保持顺序执行，因为 ADD/UPDATE/DELETE/NOOP 依赖当前库状态。
 - `top-k` 越大，回答阶段 prompt token 越多，费用也越高。
 - LongMemEval 生成答案和官方 judge 都可能产生 API 费用。
 
@@ -252,7 +315,7 @@ extract -> decide -> persist -> retrieve -> augment -> respond
 下一阶段重点：
 
 - 接入真实 OpenAI / 其他 provider 的 updater decision client，而不只使用 mock tool-call 测试桩。
-- 在 LongMemEval 上系统比较 `rules`、`llm_tool_call`、不同 embedding provider 和不同 `top_k` 的效果。
+- 在 LongMemEval 上系统比较 oracle baseline、memory-system evaluation、不同 embedding provider 和不同 `top_k` 的效果。
 - 后续再引入 hybrid retrieval、reranker、compaction、importance score、contradiction detector 和更严肃的 benchmark。
 
 完整 milestone 和实现计划见 [PROJECT_PLAN.md](PROJECT_PLAN.md)。

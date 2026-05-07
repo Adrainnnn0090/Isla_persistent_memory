@@ -237,9 +237,11 @@ class OpenAIMemoryExtractor:
         model: str = "gpt-4.1-mini",
         api_key: str | None = None,
         fallback_extractor: RuleBasedMemoryExtractor | None = None,
+        include_assistant_facts: bool = False,
     ) -> None:
         self.model = model
         self.fallback_extractor = fallback_extractor or RuleBasedMemoryExtractor()
+        self.include_assistant_facts = include_assistant_facts
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -256,10 +258,18 @@ class OpenAIMemoryExtractor:
         current_user_message: Message,
         current_assistant_message: Message | None = None,
     ) -> list[CandidateMemory]:
-        if self.fallback_extractor._looks_like_question(current_user_message.content):
+        if (
+            not self.include_assistant_facts
+            and self.fallback_extractor._looks_like_question(current_user_message.content)
+        ):
             return []
 
-        prompt = self._build_prompt(recent_messages, current_user_message, current_assistant_message)
+        prompt = self._build_prompt(
+            recent_messages,
+            current_user_message,
+            current_assistant_message,
+            include_assistant_facts=self.include_assistant_facts,
+        )
         try:
             response = self.client.responses.create(
                 model=self.model,
@@ -280,17 +290,30 @@ class OpenAIMemoryExtractor:
         recent_messages: list[Message],
         current_user_message: Message,
         current_assistant_message: Message | None,
+        include_assistant_facts: bool = False,
     ) -> str:
-        del current_assistant_message
-        user_messages = [message for message in recent_messages[-10:] if message.role == "user"]
+        recent_payload = (
+            recent_messages[-10:]
+            if include_assistant_facts
+            else [message for message in recent_messages[-10:] if message.role == "user"]
+        )
         payload = {
-            "recent_user_messages": [message.to_dict() for message in user_messages],
+            "recent_messages": [message.to_dict() for message in recent_payload],
             "current_user_message": current_user_message.to_dict(),
         }
+        if include_assistant_facts and current_assistant_message is not None:
+            payload["current_assistant_message"] = current_assistant_message.to_dict()
+        assistant_policy = (
+            "Extract stable, verifiable facts from both user and assistant messages. "
+            "Assistant facts are allowed because benchmark answers may depend on information "
+            "the assistant provided in prior sessions."
+            if include_assistant_facts
+            else "Extract memories only from user-authored messages.\n"
+            "Never extract memories from assistant-generated content."
+        )
         return f"""You extract long-term user memories from conversation.
 
-Extract memories only from user-authored messages.
-Never extract memories from assistant-generated content.
+{assistant_policy}
 Only extract information that is likely to be useful in future conversations.
 Do not extract one-off tasks, temporary context, or trivial statements.
 If the current user message is asking what the assistant remembers, return an empty memories list.
